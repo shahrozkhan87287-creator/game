@@ -3,20 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Shahroz’s Tiny Runner</title>
+<title>Shahroz’s Tiny Runner+ (Cartoon + Difficulty)</title>
 <style>
   body{margin:0;background:#111;color:#eee;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
   .wrap{max-width:640px;margin:0 auto;padding:8px}
-  .bar{display:flex;justify-content:space-between;margin:8px 0}
+  .bar{display:flex;justify-content:space-between;margin:8px 0;gap:8px;flex-wrap:wrap}
   #game{display:block;width:100%;height:auto;border:1px solid #333;background:#87ceeb;border-radius:8px}
   .note{opacity:.85;text-align:center;font-size:12px;margin-top:6px}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="bar"><div>Score: <span id="s">0</span></div><div>Created by <b>Shahroz Khan</b></div></div>
+  <div class="bar">
+    <div>Score: <span id="s">0</span></div>
+    <div>Level: <span id="lvl">1</span></div>
+    <div>Created by <b>Shahroz Khan</b></div>
+  </div>
   <canvas id="game" width="640" height="360"></canvas>
-  <div class="note">Jump with Space / ↑ / Tap • Avoid the green block</div>
+  <div class="note">Jump with Space / ↑ / Tap • Avoid the green pipes • Difficulty increases as you play</div>
 </div>
 
 <script>
@@ -29,11 +33,24 @@
   const W=c.width, H=c.height, GY=H-40; // ground y
   const GRAV=0.6, JUMP=-11, FALLMAX=14;
 
-  // --- state ---
-  let px=120, py=GY-24, pw=24, ph=24, pvy=0, on=true, hold=false, buf=0, coyote=0;
-  let ox=W+20, oy=GY-24, ow=28, oh=24, speed=4; // one obstacle
+  // --- player (cartoon) ---
+  // logical hitbox (simple rect), but we draw a cartoon on top
+  let px=120, py=GY-28, pw=24, ph=28, pvy=0, on=true, hold=false, buf=0, coyote=0;
+
+  // --- obstacles (multiple now) ---
+  // each: {x,y,w,h}
+  const obs=[];
+  let baseSpeed=4;           // ramps with level
+  let spawnCD=70;            // frames until next spawn (ramps down)
+  let spawnTimer=0;
+
+  // --- score / level ---
   let score=0; const scoreEl=document.getElementById('s');
-  let running=true, t=0;
+  let level=1; const lvlEl=document.getElementById('lvl');
+  let frames=0;
+
+  // --- running flag ---
+  let running=true;
 
   // --- input: one button jump ---
   let want=false;
@@ -49,16 +66,43 @@
     if(e.code==='Space'||e.code==='ArrowUp') release();
   });
 
-  // --- tiny helpers ---
+  // --- helpers ---
   function hit(ax,ay,aw,ah,bx,by,bw,bh){
     return ax<bx+bw && ax+aw>bx && ay<by+bh && ay+ah>by;
+  }
+  function rand(a,b){ return Math.random()*(b-a)+a; }
+  function irand(a,b){ return Math.floor(rand(a,b)); }
+
+  // spawn one or two pipes with varied size
+  function spawnObstacle(){
+    // width & height vary with level
+    const w = irand(24, 36 + Math.min(10, level));              // can get a bit wider
+    const h = irand(18 + Math.min(20, level*2), 38 + Math.min(28, level*2)); // taller over time
+    const y = GY - h;
+
+    obs.push({x: W + 10, y, w, h});
+
+    // small chance of a second back-to-back pipe (harder)
+    if(Math.random() < Math.min(0.1 + level*0.02, 0.35)){
+      const gap = irand(70 - Math.min(30, level*2), 110); // closer at higher level
+      const h2 = irand(18, 40 + Math.min(30, level*2));
+      obs.push({x: W + 10 + gap, y: GY - h2, w: irand(24, 36), h: h2});
+    }
   }
 
   // --- loop ---
   function step(){
-    if(!running) return draw(true);
+    if(!running){ draw(true); return; }
 
-    t++;
+    frames++;
+
+    // difficulty ramp (every ~10 seconds ≈ 600 frames @60fps)
+    if(frames % 600 === 0){
+      level++;
+      lvlEl.textContent = level;
+      baseSpeed = Math.min(8.5, baseSpeed + 0.5);            // faster world
+      spawnCD   = Math.max(36, spawnCD - 6);                  // spawns more often
+    }
 
     // buffered jump + coyote
     if(want){ buf=6; want=false; }
@@ -75,15 +119,34 @@
     py+=pvy;
     if(py+ph>=GY){ py=GY-ph; pvy=0; on=true; } else on=false;
 
-    // obstacle moves left; respawn when past
-    ox-=speed;
-    if(ox+ow<0){ ox=W+Math.random()*120; score++; scoreEl.textContent=score; }
+    // spawn logic
+    spawnTimer--;
+    if(spawnTimer<=0){
+      spawnObstacle();
+      spawnTimer = spawnCD + irand(-8, 12); // a little randomness
+    }
 
-    // simple difficulty ramp
-    if(t%360===0) speed=Math.min(7, speed+0.4);
+    // move obstacles & score on pass
+    for(const o of obs){
+      o.x -= baseSpeed;
+      if(o.x + o.w === Math.floor(px)) { /* optional exact pass tick */ }
+    }
 
-    // collision
-    if(hit(px,py,pw,ph, ox,oy,ow,oh)){ running=false; }
+    // remove off-screen & increment score when pipes leave fully
+    for(let i=obs.length-1;i>=0;i--){
+      if(obs[i].x + obs[i].w < 0){
+        obs.splice(i,1);
+        score++; scoreEl.textContent = score; // reward survival per obstacle cleared
+      }
+    }
+
+    // collisions
+    for(const o of obs){
+      if(hit(px,py,pw,ph, o.x,o.y,o.w,o.h)){
+        running=false;
+        break;
+      }
+    }
 
     draw(false);
     requestAnimationFrame(step);
@@ -95,27 +158,47 @@
     // ground
     x.fillStyle='#5daa2a'; x.fillRect(0,GY,W,H-GY);
 
-    // obstacle (pipe-like block)
-    x.fillStyle='#2ecc71'; x.fillRect(ox,oy,ow,oh);
-    x.fillStyle='#27ae60'; x.fillRect(ox-4,oy-6,ow+8,6);
+    // obstacles (green pipes)
+    for(const o of obs){
+      x.fillStyle='#2ecc71'; x.fillRect(o.x,o.y,o.w,o.h);
+      x.fillStyle='#27ae60'; x.fillRect(o.x-4,o.y-6,o.w+8,6);
+      x.strokeStyle='rgba(0,0,0,.15)'; x.strokeRect(o.x,o.y,o.w,o.h);
+    }
 
-    // player (red square + hat)
+    // player — little cartoon character
+    // body (blue overalls)
+    const bx = px, by = py, bw = pw, bh = ph;
     // shadow
-    x.fillStyle='rgba(0,0,0,.15)'; x.beginPath(); x.ellipse(px+pw/2, py+ph+6, 14, 5, 0, 0, Math.PI*2); x.fill();
-    // body
-    x.fillStyle='#ff6b6b'; x.fillRect(px,py,pw,ph);
-    x.fillStyle='#e74c3c'; x.fillRect(px-2,py-6,pw+4,6);
+    x.fillStyle='rgba(0,0,0,.15)'; x.beginPath(); x.ellipse(bx+bw/2, by+bh+6, 14, 5, 0, 0, Math.PI*2); x.fill();
+    // legs
+    x.fillStyle='#2e86de'; x.fillRect(bx+3, by+bh-8, 6, 8);
+    x.fillRect(bx+bw-9, by+bh-8, 6, 8);
+    // torso
+    x.fillStyle='#54a0ff'; x.fillRect(bx+3, by+10, bw-6, bh-14);
+    // head
+    x.fillStyle='#ffcc99'; x.beginPath(); x.arc(bx+bw/2, by+8, 8, 0, Math.PI*2); x.fill();
+    // eyes
+    x.fillStyle='#000'; x.fillRect(bx+bw/2-5, by+6, 2, 3);
+    x.fillRect(bx+bw/2+3, by+6, 2, 3);
+    // smile
+    x.strokeStyle='#b3542e'; x.lineWidth=1.5; x.beginPath(); x.arc(bx+bw/2, by+10, 4, 0.1*Math.PI, 0.9*Math.PI); x.stroke();
+    // cap
+    x.fillStyle='#e74c3c'; x.fillRect(bx-2, by-4, bw+4, 6);
+    x.fillStyle='#c0392b'; x.fillRect(bx+8, by-1, 10, 3); // brim
 
     if(over){
-      x.fillStyle='rgba(0,0,0,.55)'; x.fillRect(W/2-140,H/2-50,280,100);
-      x.strokeStyle='#fff3'; x.strokeRect(W/2-140,H/2-50,280,100);
+      x.fillStyle='rgba(0,0,0,.55)';
+      x.fillRect(W/2-140, H/2-50, 280, 100);
+      x.strokeStyle='#fff3'; x.strokeRect(W/2-140, H/2-50, 280, 100);
       x.fillStyle='#fff'; x.textAlign='center'; x.textBaseline='middle';
       x.font='bold 26px system-ui,sans-serif'; x.fillText('GAME OVER', W/2, H/2-8);
-      x.font='14px system-ui,sans-serif'; x.fillText('Tap or press Space to jump again (reload to reset)', W/2, H/2+20);
+      x.font='14px system-ui,sans-serif'; x.fillText('Tap or press Space to try again (reload page)', W/2, H/2+20);
     }
   }
 
-  // start immediately
+  // Prime a spawn so the first pipe appears shortly
+  spawnTimer = 30;
+  // Start immediately
   requestAnimationFrame(step);
 })();
 </script>
