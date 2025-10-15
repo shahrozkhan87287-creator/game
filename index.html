@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hen Hop — Jump Poops + Headshots (by Shahroz)</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Hen Hop — Straight-Down Bonks + Extra Life (by Shahroz)</title>
 <style>
   :root { --ink:#0c0f17; --text:#eaf2ff; --chip:#0e203e; --chip2:#0a152b; }
   *{box-sizing:border-box}
@@ -30,7 +30,7 @@
     <div class="chip">by <b>Shahroz Khan</b></div>
   </div>
   <canvas id="game" width="720" height="405" aria-label="Hen Hop"></canvas>
-  <div class="note">Tap/Space/↑ to jump • Poops on EVERY jump (straight down) • Jump OVER a person for an auto headshot 🎯 • P to pause</div>
+  <div class="note">Tap/Space/↑ to jump • When you’re airborne and exactly above a guy, the hen drops a 🤍 poop straight down for a head bonk • Random ❤️ gives an extra life • P to pause</div>
 </div>
 
 <script>
@@ -48,7 +48,7 @@
   const pauseBtn=document.getElementById('pauseBtn');
   const trollEl=document.getElementById('troll');
 
-  // Audio (synth)
+  // Audio (synth only)
   let AC=null, audioPrimed=false;
   const ac=()=>{ if(!AC){ const C=window.AudioContext||window.webkitAudioContext; AC=new C(); } return AC; };
   function tone(f=640,d=0.08,v=0.25,type='sine',endF=null){
@@ -58,16 +58,17 @@
     g.gain.setValueAtTime(v,t); g.gain.exponentialRampToValueAtTime(0.0001,t+d);
     o.connect(g).connect(a.destination); o.start(t); o.stop(t+d);
   }
-  const sCluck=()=>{ tone(620,0.06,0.22,'square', 480); setTimeout(()=>tone(760,0.05,0.18,'square', 520), 35); };
-  const sBwak =()=> tone(260,0.18,0.35,'sawtooth', 180);
-  const sSplat=()=> tone(900,0.10,0.22,'triangle', 300);
-  const sTing =()=> tone(1400,0.13,0.22,'square', 2200);
+  const sCluck=()=>{ tone(620,0.06,0.22,'square',480); setTimeout(()=>tone(760,0.05,0.18,'square',520),35); };
+  const sBwak =()=> tone(260,0.18,0.35,'sawtooth',180);
+  const sSplat=()=> tone(900,0.10,0.22,'triangle',300);
+  const sTing =()=> tone(1400,0.13,0.22,'square',2200);
+  const sHeart=()=> { tone(700,0.08,0.26,'sine',1200); setTimeout(()=>tone(1000,0.09,0.2,'sine',1600),60); };
 
   // Player (hen)
   let px=120, py=GY-26, pw=26, ph=26, pvy=0, on=true, hold=false, buf=0, coyote=0;
   let runPhase=0, squash=1, stretch=1, landCooldown=0;
   let popPulse=0, popRing=0, wingFlap=0, beakBlink=0, googly=0;
-  let invuln=0, recentJump=0;
+  let invuln=0, recentJump=0; // recent jump window for poop logic
 
   // Backdrop
   const clouds=[], birds=[];
@@ -75,16 +76,18 @@
   function spawnBird(){ birds.push({x: W + Math.random()*120, y: 48 + Math.random()*115, v: 1.1 + Math.random()*0.9, flap: Math.random()*Math.PI*2, dir: Math.random()<.6 ? -1 : 1}); }
   for(let i=0;i<2;i++) spawnBird();
 
-  // FX & entities
-  const parts=[];    // dust/feathers/splat
-  const pops=[];     // headshot text
-  const obs=[];      // pipes/guys/coins/poop
+  // Entities & FX
+  // types: pipe/guy/coin/poop/heart
+  const obs=[];
+  const parts=[];   // dust/feathers/splat/confetti
+  const pops=[];    // "HEADSHOT!" text
   let baseSpeed=4, spawnCD=60, spawnTimer=0;
 
   // Game state
   let score=0, best=+(localStorage.getItem('henhop_best')||0); bestEl.textContent=best;
   let level=1, frames=0, levelAnim=0, paused=false, countdown=30, running=true, shake=0;
   let lives=3; livesEl.textContent=lives;
+  const MAX_LIVES=5;
 
   // Input
   let want=false;
@@ -108,22 +111,12 @@
   function dust(x0,y0,dir=1,col='#ffffff'){ for(let i=0;i<6;i++) parts.push({x:x0,y:y0,vx:(Math.random()*1.5+0.5)*dir,vy:-Math.random()*1.5-0.2,a:1,sz:2,col});}
   function feathers(x0,y0){ for(let i=0;i<6;i++) parts.push({x:x0+rand(-3,3),y:y0+rand(-3,3),vx:rand(-1,1),vy:rand(-2,-0.5),a:1,sz:2,col:'#fff'}); }
   function splat(x0,y0){ for(let i=0;i<10;i++) parts.push({x:x0+rand(-3,3),y:y0+rand(-1,2),vx:rand(-0.6,0.6),vy:rand(-0.4,0.2),a:1,sz:2,col:'#f5f5f5'}); }
+  function confetti(x0,y0){ for(let i=0;i<18;i++) parts.push({x:x0,y:y0,vx:rand(-1.2,1.2),vy:rand(-2.2,-0.4),a:1,sz:2,col:['#ffe066','#74c0fc','#ff8787','#69db7c'][irand(0,4)]}); }
 
-  // NEW: drop a white poop straight down on jump
+  // Straight-down poop spawner (no aim)
   function dropPoopDown(){
     const startX = px+pw/2, startY = py+ph/2;
     obs.push({type:'poop', x:startX, y:startY, vx:0, vy:1.2, rot:0, land:false});
-  }
-  // Aimed headshot drop (used when jumping over a guy)
-  function dropPoopAimed(targetX, targetY){
-    const startX = px+pw/2, startY = py+ph/2;
-    const vy0 = 1.0, g = 0.28;
-    const A=0.5*g, B=vy0, C=startY-targetY;
-    let t = (-B + Math.sqrt(Math.max(0,B*B - 4*A*C)))/(2*A);
-    if(!isFinite(t) || t<0.12) t=0.12; if(t>1.2) t=1.2;
-    const guyFutureX = targetX - baseSpeed*0.95*t;
-    const vx0 = (guyFutureX - startX)/t;
-    obs.push({type:'poop', x:startX, y:startY, vx:vx0, vy:vy0, rot:0, land:false});
   }
 
   // Spawners
@@ -141,9 +134,15 @@
     }
   }
   function spawnCoin(x,y,shy=false){ obs.push({type:'coin',x,y,w:14,h:14,shy,jig:Math.random()*Math.PI*2,sparkle:0}); }
+  function spawnHeart(xStart){
+    // rare extra life heart floating above ground
+    obs.push({type:'heart', x:xStart+irand(20,80), y:GY-irand(120,160), w:18, h:16, sway:Math.random()*Math.PI*2, spin:0});
+  }
   function spawnChunk(xStart){
     if(Math.random()<0.45){ spawnGuys(xStart); if(Math.random()<0.6) spawnCoin(xStart+irand(12,28), GY - irand(60,100), true); }
     else { spawnPipePair(xStart); if(Math.random()<0.75) spawnCoin(xStart+10, GY - irand(90,130), Math.random()<0.5); }
+    // small chance a heart appears each chunk (rarer at early levels)
+    if(Math.random()<Math.min(0.04 + level*0.003, 0.08)) spawnHeart(xStart);
   }
 
   // Restart
@@ -175,14 +174,14 @@
     // Spawn cadence
     if(--spawnTimer<=0){ spawnChunk(W+10); spawnTimer = spawnCD + irand(-10,14); }
 
-    // Jump buffer / coyote
+    // Handle jump buffer / coyote & sounds
     if(want){ buf=7; want=false; }
     if(on) coyote=5; else if(coyote>0) coyote--;
     if(buf>0){
       if(on||coyote>0){
-        pvy=JUMP; on=false; buf=0; recentJump=18;   // ~0.3s window after jump
+        pvy=JUMP; on=false; buf=0; recentJump=18; // ~0.3s window after jumping
         sCluck();
-        dropPoopDown();                             // <-- NEW: poop on every jump
+        dropPoopDown(); // always poop on jump (straight down)
         squash=0.86; stretch=1.22; popPulse=1; popRing=1; wingFlap=1; googly=1;
         dust(px+pw/2, GY, (Math.random()<0.5?-1:1),'#fff'); feathers(px+pw/2, py+ph/2);
       } else { buf--; }
@@ -198,23 +197,25 @@
     runPhase += on ? (0.28 + baseSpeed*0.02) : 0.16;
     popPulse *= 0.86; popRing *= 0.90; wingFlap *= 0.9; beakBlink *= 0.9; googly *= 0.95;
 
-    // Move entities + jump-over headshot trigger
+    // Entities movement + **strict straight-down head bonk check**
     for(const o of obs){
       if(o.type==='pipe'){
         o.x -= baseSpeed;
       }else if(o.type==='guy'){
         o.x -= baseSpeed*0.95; o.walk += 0.25 + baseSpeed*0.02;
         if(o.squished){ o.deadT=(o.deadT||0)+1; }
-        // If we recently jumped and we are airborne and a guy is under us → aimed headshot
+        // Only if (a) we recently jumped, (b) we're airborne, (c) we are vertically above head, (d) X aligned
         const henCX = px+pw/2, guyCX = o.x+o.w/2, headY = o.y+4;
-        const horizontallyClose = Math.abs(henCX - guyCX) < 48;
         const aboveHead = (py+ph) < headY-2;
-        if(recentJump>0 && !on && !o.pooped && horizontallyClose && aboveHead){
+        const xAligned = Math.abs(henCX - guyCX) < 6; // <- tight alignment so the straight drop hits the head
+        if(recentJump>0 && !on && !o.pooped && aboveHead && xAligned){
           o.pooped = true;
-          dropPoopAimed(guyCX, headY);
+          dropPoopDown(); // straight down only
         }
       }else if(o.type==='coin'){
         o.x -= baseSpeed*0.92; o.jig = (o.jig||0)+0.2; o.y += Math.sin(o.jig)*0.6;
+      }else if(o.type==='heart'){
+        o.x -= baseSpeed*0.9; o.sway += 0.05; o.spin += 0.04; o.y += Math.sin(o.sway)*0.6;
       }else if(o.type==='poop'){
         o.vy += 0.28; o.x += o.vx; o.y += o.vy; o.rot += 0.2;
       }
@@ -227,8 +228,16 @@
         if(hit(px,py,pw,ph,o.x,o.y,o.w,o.h)){ addScore(2); sTing(); obs.splice(i,1); }
         continue;
       }
+      if(o.type==='heart'){
+        if(hit(px,py,pw,ph,o.x,o.y,o.w,o.h)){
+          if(lives<MAX_LIVES){ lives++; livesEl.textContent=lives; }
+          sHeart(); confetti(o.x+o.w/2,o.y);
+          obs.splice(i,1);
+        }
+        continue;
+      }
       if(o.type==='poop'){
-        // headshot vs guys
+        // headshot vs guys (straight drop)
         if(!o.land){
           for(const g of obs){
             if(g.type==='guy' && !g.squished){
@@ -259,18 +268,18 @@
       }
     }
 
-    // Cleanup & score for passed obstacles / dead guys
+    // Cleanup & score
     for(let i=obs.length-1;i>=0;i--){
       const o=obs[i];
       if(o.type!=='poop' && o.x+ (o.w||0) < 0){
-        if(o.type!=='coin' && !o.squished) addScore(1);
+        if(o.type!=='coin' && o.type!=='heart' && !o.squished) addScore(1);
         obs.splice(i,1);
       }
       if(o.type==='guy' && o.squished && o.deadT>30){ addScore(1); obs.splice(i,1); }
       if(o.type==='poop' && (o.x<-20 || o.x>W+20 || (o.land && Math.random()<0.02))) obs.splice(i,1);
     }
 
-    // particles + headshot pop text
+    // FX updates
     for(let i=parts.length-1;i>=0;i--){ const p=parts[i]; p.x+=p.vx; p.y+=p.vy; p.vy+=0.12; p.a-=0.03; if(p.a<=0) parts.splice(i,1); }
     for(let i=pops.length-1;i>=0;i--){ const h=pops[i]; h.y+=h.vy; h.vy*=0.98; h.a-=0.02; h.scale+=0.01; if(h.a<=0) pops.splice(i,1); }
 
@@ -281,19 +290,28 @@
   function addScore(n){ score+=n; scoreEl.textContent=score; if(score>best){ best=score; localStorage.setItem('henhop_best', best); bestEl.textContent=best; } }
   function takeHit(){ lives--; livesEl.textContent=lives; sBwak(); invuln=90; dust(px+pw/2, py+ph/2, (Math.random()<0.5?-1:1)); if(lives<=0){ running=false; } }
 
-  // Draw
+  // Render
   function draw(){
     ctx.setTransform(1,0,0,1,0,0);
+    // sky
     const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#69c3ff'); g.addColorStop(1,'#a8e0ff'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
-    ctx.fillStyle='rgba(255,255,255,.93)'; for(const c0 of clouds){ bubble(c0.x,c0.y,26*c0.s); bubble(c0.x+22*c0.s,c0.y+7*c0.s,18*c0.s); bubble(c0.x-18*c0.s,c0.y+9*c0.s,16*c0.s); }
+    // clouds
+    ctx.fillStyle='rgba(255,255,255,.93)';
+    for(const c0 of clouds){ bubble(c0.x,c0.y,26*c0.s); bubble(c0.x+22*c0.s,c0.y+7*c0.s,18*c0.s); bubble(c0.x-18*c0.s,c0.y+9*c0.s,16*c0.s); }
+    // birds
     for(const b of birds){ drawBird(b); }
-    ctx.fillStyle='#5daa2a'; ctx.fillRect(0,GY,W,H-GY); const stripeOffset=(frames*baseSpeed*0.6)%32; ctx.fillStyle='#3a7d24'; for(let xg=-stripeOffset;xg<W;xg+=32) ctx.fillRect(xg,GY+24,22,6);
+    // ground
+    ctx.fillStyle='#5daa2a'; ctx.fillRect(0,GY,W,H-GY);
+    const stripeOffset=(frames*baseSpeed*0.6)%32; ctx.fillStyle='#3a7d24';
+    for(let xg=-stripeOffset;xg<W;xg+=32) ctx.fillRect(xg,GY+24,22,6);
 
+    // entities
     for(const o of obs){
-      if(o.type==='pipe'){ drawPipe(o); }
-      else if(o.type==='guy'){ drawGuy(o); }
-      else if(o.type==='coin'){ drawCoin(o); }
-      else if(o.type==='poop'){ drawPoop(o); }
+      if(o.type==='pipe') drawPipe(o);
+      else if(o.type==='guy') drawGuy(o);
+      else if(o.type==='coin') drawCoin(o);
+      else if(o.type==='heart') drawHeart(o);
+      else if(o.type==='poop') drawPoop(o);
     }
 
     // particles
@@ -302,9 +320,9 @@
     // hen
     drawHen();
 
-    // headshot text
+    // “HEADSHOT!” popups
     for(const h of pops){
-      ctx.save(); ctx.translate(h.x, h.y); ctx.scale(h.scale, h.scale);
+      ctx.save(); ctx.translate(h.x, h.y); ctx.scale(h.scale||1, h.scale||1);
       ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.lineWidth=4; ctx.globalAlpha=Math.max(0,h.a);
       ctx.font='bold 22px system-ui,sans-serif'; ctx.strokeStyle='rgba(0,0,0,.75)'; ctx.strokeText('HEADSHOT!', 0, 0);
       ctx.fillStyle='#fff64d'; ctx.fillText('HEADSHOT!', 0, 0);
@@ -340,6 +358,20 @@
     ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(o.x+o.w/2, o.y+o.h/2, o.w/2, 0, Math.PI*2); ctx.fill();
     ctx.strokeStyle='#ffef9a'; ctx.stroke();
     ctx.fillStyle='#fff'; const t=(o.jig||0); const gx=o.x+o.w/2+Math.cos(t*8)*3, gy=o.y+o.h/2+Math.sin(t*8)*3; ctx.fillRect(gx,gy,2,2);
+  }
+  function drawHeart(o){
+    ctx.save(); ctx.translate(o.x+o.w/2, o.y+o.h/2); ctx.rotate(Math.sin(o.spin)*0.2);
+    // glow
+    ctx.globalAlpha=0.3; ctx.fillStyle='#ff6b81';
+    ctx.beginPath(); ctx.ellipse(0,0,14,10,0,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+    // heart
+    ctx.fillStyle='#ff4757';
+    ctx.beginPath();
+    ctx.moveTo(0,6);
+    ctx.bezierCurveTo(10, -4, 8, -10, 0, -4);
+    ctx.bezierCurveTo(-8, -10, -10, -4, 0, 6);
+    ctx.fill();
+    ctx.restore();
   }
   function drawPoop(o){
     ctx.save(); ctx.translate(o.x,o.y); ctx.rotate(o.rot||0);
