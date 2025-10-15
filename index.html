@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hen Hop — Poop & Power Play (by Shahroz)</title>
+<title>Hen Hop — Cluck & Headshot (by Shahroz)</title>
 <style>
   :root { --ink:#0c0f17; --text:#eaf2ff; --chip:#0e203e; --chip2:#0a152b; }
   *{box-sizing:border-box}
@@ -30,7 +30,7 @@
     <div class="chip">by <b>Shahroz Khan</b></div>
   </div>
   <canvas id="game" width="720" height="405" aria-label="Hen Hop"></canvas>
-  <div class="note">Tap / Space / ↑ = Jump • Pause = P • Stomp people • Avoid pipes • ⭐ = points • 💩 drops when flying over people • Power Play = 5s invincible + coin magnet (after L3, then every 5 levels)</div>
+  <div class="note">Tap / Space / ↑ = Jump • Pause = P • Stomp people • Avoid pipes • ⭐ = points • 🤍 Poop is white & headshots guys • 🥚 Golden Egg = +10 + confetti</div>
 </div>
 
 <script>
@@ -53,24 +53,25 @@
   const ac=()=>{ if(!AC){ const C=window.AudioContext||window.webkitAudioContext; AC=new C(); } return AC; };
   function primeAudio(){ if(!audioPrimed){ try{ ac(); audioPrimed=true; }catch{} } }
   function tone(f=640,d=0.08,v=0.25,type='sine',endF=null){
-    const a=ac(); if(a.state==='suspended') a.resume(); const o=a.createOscillator(), g=a.createGain();
-    o.type=type; const t=a.currentTime;
-    o.frequency.setValueAtTime(f,t); if(endF){ o.frequency.exponentialRampToValueAtTime(endF,t+d*0.9); }
+    const a=ac(); if(a.state==='suspended') a.resume();
+    const o=a.createOscillator(), g=a.createGain(); const t=a.currentTime;
+    o.type=type; o.frequency.setValueAtTime(f,t); if(endF){ o.frequency.exponentialRampToValueAtTime(endF,t+d*0.9); }
     g.gain.setValueAtTime(v,t); g.gain.exponentialRampToValueAtTime(0.0001,t+d);
     o.connect(g).connect(a.destination); o.start(t); o.stop(t+d);
   }
-  const sPop = ()=>tone(680,0.085,0.26,'sine', 360);
-  const sStomp = ()=>tone(360,0.10,0.3,'triangle', 220);
-  const sTing = ()=>tone(1400,0.13,0.22,'square', 2200);
-  const sHit  = ()=>tone(220,0.18,0.35,'sawtooth', 160);
-  const sPower= ()=>tone(520,0.6,0.15,'sine', 1040);
-  const sPlop = ()=>tone(300,0.12,0.22,'square', 180);
+  // Chicken-y sounds
+  const sCluck=()=>{ tone(620,0.06,0.22,'square', 480); setTimeout(()=>tone(760,0.05,0.18,'square', 520), 35); }; // jump
+  const sBwak =()=> tone(260,0.18,0.35,'sawtooth', 180); // damage
+  const sSplat=()=> tone(900,0.10,0.22,'triangle', 300); // headshot hit
+  const sTing =()=> tone(1400,0.13,0.22,'square', 2200); // coin
+  const sEgg  =()=> { tone(800,0.10,0.22,'sine',1200); setTimeout(()=>tone(1200,0.14,0.18,'sine',1800),80); } // egg pickup
+  const sPower=()=> tone(520,0.6,0.15,'sine', 1040); // power play
 
   // Player: Hen
   let px=120, py=GY-26, pw=26, ph=26, pvy=0, on=true, hold=false, buf=0, coyote=0;
   let runPhase=0, squash=1, stretch=1, landCooldown=0;
   let popPulse=0, popRing=0, wingFlap=0, beakBlink=0, googly=0;
-  let invuln=0; // frames of invulnerability blink after hit
+  let invuln=0;
 
   // Backdrop
   const clouds=[], birds=[];
@@ -79,12 +80,15 @@
   for(let i=0;i<2;i++) spawnBird();
 
   // Particles & entities
-  const parts=[]; // dust/feathers/splat sparkles: {x,y,vx,vy,a,sz,col}
-  // Obstacles & collectibles & poop
+  const parts=[]; // dust/feathers/splat/confetti: {x,y,vx,vy,a,sz,col}
+  // Headshot text popups
+  const pops=[]; // {x,y,a,vy,scale}
+  // Entities
   // pipe:{type:'pipe',x,y,w,h,bob?,bobA,bobS,bobT}
   // guy :{type:'guy',x,y,w,h,walk,color,squished?,deadT?,pooped?}
   // coin:{type:'coin',x,y,w,h,shy,jig,sparkle}
   // poop:{type:'poop',x,y,vx,vy,rot,land?}
+  // egg :{type:'egg',x,y,w,h,spin}
   const obs=[];
   let baseSpeed=4, spawnCD=60, spawnTimer=0;
 
@@ -93,9 +97,7 @@
   let level=1, frames=0, levelAnim=0, paused=false, countdown=0, running=true, shake=0;
   let snake=null;
   let lives=3; livesEl.textContent=lives;
-
-  // Power Play (after L3, every 5 levels): 5s
-  let powerTimer=0; // frames left (300 = 5s at 60fps)
+  let powerTimer=0; // 5s invincible/magnet when triggered (after L3, every 5 levels)
 
   // Troll text
   let trollTimer=0;
@@ -122,7 +124,8 @@
   const hit=(ax,ay,aw,ah,bx,by,bw,bh)=> ax<bx+bw && ax+aw>bx && ay<by+bh && ay+ah>by;
   function dust(x0,y0,dir=1,col='#ffffff'){ for(let i=0;i<6;i++) parts.push({x:x0,y:y0,vx:(Math.random()*1.5+0.5)*dir,vy:-Math.random()*1.5-0.2,a:1,sz:2,col});}
   function feathers(x0,y0){ for(let i=0;i<6;i++) parts.push({x:x0+rand(-3,3),y:y0+rand(-3,3),vx:rand(-1,1),vy:rand(-2,-0.5),a:1,sz:2,col:'#fff'}); }
-  function splat(x0,y0){ for(let i=0;i<10;i++) parts.push({x:x0+rand(-3,3),y:y0+rand(-1,2),vx:rand(-0.6,0.6),vy:rand(-0.4,0.2),a:1,sz:2,col:'#6b4e2e'}); }
+  function splat(x0,y0){ for(let i=0;i<10;i++) parts.push({x:x0+rand(-3,3),y:y0+rand(-1,2),vx:rand(-0.6,0.6),vy:rand(-0.4,0.2),a:1,sz:2,col:'#f5f5f5'}); }
+  function confetti(x0,y0){ for(let i=0;i<25;i++) parts.push({x:x0,y:y0,vx:rand(-1.5,1.5),vy:rand(-2.5,-0.5),a:1,sz:2,col:['#ffe066','#74c0fc','#ff8787','#69db7c'][irand(0,4)]}); }
   function taunt(force=false){ if(force || trollTimer<=0){ trollEl.textContent = TAUNTS[irand(0,TAUNTS.length)]; trollTimer = 180; } }
 
   // Spawners
@@ -144,6 +147,8 @@
     const w=irand(18,22), h=irand(26,32), color=Math.random()<.5?'#ff9f43':'#54a0ff';
     obs.push({type:'guy',x:xStart,y:GY-h,w,h,walk:0,color,pooped:false});
     if(Math.random()<.4){ const d=irand(40,80); obs.push({type:'guy',x:xStart+d,y:GY-h,w:irand(18,22),h:irand(26,32),walk:0,color:(Math.random()<.5?'#10ac84':'#ee5253'),pooped:false}); }
+    // rare golden egg near guys
+    if(Math.random()<0.12) obs.push({type:'egg', x:xStart+irand(10,40), y:GY-irand(110,150), w:16, h:20, spin:0});
   }
   function spawnCoin(x,y,shy=false){ obs.push({type:'coin',x,y,w:14,h:14,shy,jig:Math.random()*Math.PI*2,sparkle:0}); }
   function spawnChunk(xStart){
@@ -153,13 +158,14 @@
     }else{
       spawnPipePair(xStart);
       if(Math.random()<0.75) spawnCoin(xStart+10, GY - irand(90,130), Math.random()<0.5);
+      if(Math.random()<0.05) obs.push({type:'egg', x:xStart+irand(20,70), y:GY-irand(120,160), w:16, h:20, spin:0});
     }
   }
 
   function restart(){
     px=120; py=GY-26; pw=26; ph=26; pvy=0; on=true; hold=false; buf=0; coyote=0;
     runPhase=0; squash=1; stretch=1; landCooldown=0; popPulse=0; popRing=0; wingFlap=0; beakBlink=0; googly=0; invuln=0;
-    obs.length=0; parts.length=0;
+    obs.length=0; parts.length=0; pops.length=0;
     baseSpeed=4; spawnCD=60; spawnTimer=30;
     score=0; scoreEl.textContent=score;
     level=1; lvlEl.textContent=level; frames=0; levelAnim=30;
@@ -185,10 +191,8 @@
       baseSpeed=Math.min(9.6, baseSpeed+0.45);
       spawnCD=Math.max(26, spawnCD-5);
       if(birds.length<6 && Math.random()<.65) spawnBird();
-      // Power play trigger (after L3, then every 5 levels: 5s)
       if(level>=3 && level % 5 === 0){
-        powerTimer = 300; sPower(); trollEl.textContent="POWER PLAY! 🐔✨ Invincible + coin magnet";
-        trollTimer=180;
+        powerTimer = 300; sPower(); trollEl.textContent="POWER PLAY! 🐔✨ Invincible + coin magnet"; trollTimer=180;
       } else { taunt(); }
     }
 
@@ -202,7 +206,7 @@
     if(buf>0){
       if(on||coyote>0){
         pvy=JUMP; on=false; buf=0;
-        sPop();
+        sCluck();
         squash=0.86; stretch=1.22; popPulse=1; popRing=1; wingFlap=1; googly=1;
         dust(px+pw/2, GY, (Math.random()<0.5?-1:1),'#fff');
         feathers(px+pw/2, py+ph/2);
@@ -225,7 +229,7 @@
     // Spawn
     if(--spawnTimer<=0){ spawnChunk(W+10); spawnTimer = spawnCD + irand(-10,14); }
 
-    // Update obstacles & near-miss
+    // Update obstacles & near-miss + poop aim
     let nearMiss=false;
     for(const o of obs){
       if(o.type==='pipe'){
@@ -233,33 +237,49 @@
       }else if(o.type==='guy'){
         o.x -= baseSpeed*0.95; o.walk += 0.25 + baseSpeed*0.02;
         if(o.squished){ o.deadT=(o.deadT||0)+1; }
-        // 💩 Drop when flying over (only once per guy)
-        const henCX = px+pw/2, guyCX = o.x+o.w/2;
-        const overGuy = Math.abs(henCX - guyCX) < 8 && (py+ph) < o.y+4; // hen above head line, centers aligned-ish
-        if(!o.pooped && overGuy && !on){
+        // WHITE poop headshot: ballistic aim to head
+        const henCX = px+pw/2, guyCX = o.x+o.w/2, headY = o.y+4;
+        const above = (py+ph) < headY-2 && Math.abs(henCX - guyCX) < 48;
+        if(!o.pooped && above && !on){
           o.pooped = true;
-          // create a poop projectile
-          obs.push({type:'poop', x:henCX, y:py+ph/2, vx:rand(-0.4,0.4), vy:1.2, rot:0, land:false});
-          sPlop();
+          const startX = henCX, startY = py+ph/2;
+          const vy0 = 1.0; const g = 0.28;
+          const A=0.5*g, B=vy0, C=startY-headY;
+          let t = (-B + Math.sqrt(Math.max(0,B*B - 4*A*C)))/(2*A);
+          if(!isFinite(t) || t<0.12) t=0.12; if(t>1.2) t=1.2;
+          const guyFutureX = guyCX - baseSpeed*0.95*t;
+          const vx0 = (guyFutureX - startX)/t;
+          obs.push({type:'poop', x:startX, y:startY, vx:vx0, vy:vy0, rot:0, land:false});
         }
       }else if(o.type==='coin'){
         o.x -= baseSpeed*0.92; o.jig += 0.2; o.y += Math.sin(o.jig)*0.6;
-        // shy coins avoid
         if(o.shy){ const dx=(px+pw/2)-(o.x+o.w/2); if(Math.abs(dx)<60) o.x -= Math.sign(dx)*1.8; }
-        // magnet during power play
         if(powerTimer>0){
           const dx=(px+pw/2)-(o.x+o.w/2), dy=(py+ph/2)-(o.y+o.h/2), d=Math.hypot(dx,dy);
           if(d<140){ o.x += dx/d*2.4; o.y += dy/d*2.0; }
         }
         if(o.sparkle<1) o.sparkle += 0.03;
+      }else if(o.type==='egg'){
+        o.x -= baseSpeed*0.9; o.spin += 0.25;
       }else if(o.type==='poop'){
-        // gravity for poop
+        // WHITE poop physics + headshot check
         o.vy += 0.28; o.x += o.vx; o.y += o.vy; o.rot += 0.2;
-        if(!o.land && o.y >= GY-6){ o.land=true; o.y = GY-6; o.vx=0; o.vy=0; splat(o.x,o.y+4); }
-        // slide off screen cleanup happens below
+        if(!o.land){
+          for(const g of obs){
+            if(g.type==='guy' && !g.squished){
+              const gx=g.x+g.w/2, gy=g.y+4;
+              if(Math.abs(o.x-gx)<6 && Math.abs(o.y-gy)<6){
+                g.squished=true; g.deadT=0; splat(gx, gy); sSplat();
+                // NEW: HEADSHOT popup
+                pops.push({x:gx, y:gy-16, a:1, vy:-0.6, scale:1});
+                o.land=true;
+              }
+            }
+          }
+          if(o.y >= GY-6){ o.land=true; o.y = GY-6; o.vx=0; o.vy=0; splat(o.x,o.y+4); sSplat(); }
+        }
       }
-
-      if(o.type!=='coin' && o.type!=='poop' && Math.abs((px+pw/2)-(o.x+o.w/2))<12 && py+ph>o.y-8) nearMiss=true;
+      if(o.type!=='coin' && o.type!=='poop' && o.type!=='egg' && Math.abs((px+pw/2)-(o.x+o.w/2))<12 && py+ph>o.y-8) nearMiss=true;
     }
     shake = nearMiss ? Math.min(4, shake+0.6) : shake*0.9;
     if(nearMiss) taunt();
@@ -268,40 +288,42 @@
     for(let i=obs.length-1;i>=0;i--){
       const o=obs[i];
       if(o.type==='poop'){
-        if(o.x < -20 || o.x > W+20 || (o.land && Math.random()<0.01)) { obs.splice(i,1); }
+        if(o.x < -20 || o.x > W+20 || (o.land && Math.random()<0.02)) { obs.splice(i,1); }
         continue;
       }
       if(o.x+o.w < 0){
         obs.splice(i,1);
-        if(o.type!=='coin' && o.type!=='poop' && !o.squished){ addScore(1); }
+        if(o.type!=='coin' && o.type!=='poop' && o.type!=='egg' && !o.squished){ addScore(1); }
       }
       if(o.type==='guy' && o.squished && o.deadT>30){ obs.splice(i,1); addScore(1); }
     }
 
-    // Collisions (coins/stomp/hit)
+    // Collisions (coins/egg/stomp/hit)
     for(let i=obs.length-1;i>=0;i--){
       const o=obs[i];
       if(o.type==='coin'){
-        if(hit(px,py,pw,ph,o.x,o.y,o.w,o.h)){
-          addScore(powerTimer>0 ? 4 : 2); sTing(); taunt(true); obs.splice(i,1);
-        }
+        if(hit(px,py,pw,ph,o.x,o.y,o.w,o.h)){ addScore(powerTimer>0 ? 4 : 2); sTing(); taunt(true); obs.splice(i,1); }
+        continue;
+      }
+      if(o.type==='egg'){
+        if(hit(px,py,pw,ph,o.x,o.y,o.w,o.h)){ addScore(10); sEgg(); confetti(o.x+o.w/2,o.y+o.h/2); obs.splice(i,1); }
         continue;
       }
       if(o.type==='poop') continue;
 
-      // Invincible during power & invuln blink prevents damage
       const canBeHit = powerTimer<=0 && invuln<=0;
 
       if(o.type==='guy' && !o.squished){
         if(hit(px,py,pw,ph,o.x,o.y,o.w,o.h)){
           const overlapY=(py+ph)-o.y;
-          if(pvy>0 && overlapY<12){ // stomp
+          if(pvy>0 && overlapY<12){
             o.squished=true; feathers(o.x+o.w/2, o.y+2);
-            pvy=-8.2; squash=0.86; stretch=1.18; popPulse=1; popRing=1; sStomp();
+            pvy=-8.2; squash=0.86; stretch=1.18; popPulse=1; popRing=1; sSplat();
+            // HEADSHOT popup on stomp too (why not!)
+            pops.push({x:o.x+o.w/2, y:o.y-12, a:1, vy:-0.6, scale:1});
             continue;
           }else if(canBeHit){
-            takeHit(o);
-            break;
+            takeHit(o); break;
           }
         }
       }else if(o.type==='pipe'){
@@ -312,6 +334,13 @@
     // Particles update
     for(let i=parts.length-1;i>=0;i--){
       const p=parts[i]; p.x+=p.vx; p.y+=p.vy; p.vy+=0.12; p.a-=0.03; if(p.a<=0) parts.splice(i,1);
+    }
+    // Headshot popups update
+    for(let i=pops.length-1;i>=0;i--){
+      const h=pops[i];
+      h.y += h.vy; h.vy *= 0.98;
+      h.a -= 0.02; h.scale += 0.01;
+      if(h.a<=0) pops.splice(i,1);
     }
 
     draw(false);
@@ -324,12 +353,10 @@
   }
 
   function takeHit(ob){
-    lives--; livesEl.textContent = lives; sHit();
+    lives--; livesEl.textContent = lives; sBwak();
     invuln = 90; // ~1.5s
-    // little knockback puff
     dust(px+pw/2, py+ph/2, (Math.random()<0.5?-1:1));
     if(lives<=0){
-      // final death -> snake mock
       const pipe=[...obs].filter(z=>z.type==='pipe' && z.x+z.w>0 && z.x<W).sort((a,b)=>Math.abs((a.x+a.w/2)-px)-Math.abs((b.x+b.w/2)-px))[0];
       const sx = pipe ? (pipe.x+pipe.w/2) : px+pw/2;
       const sy = pipe ? pipe.y : (GY-28);
@@ -340,11 +367,10 @@
 
   // Draw
   function draw(overlayOnly){
-    // Shake
     const sx=(Math.random()*2-1)*shake, sy=(Math.random()*2-1)*shake;
     ctx.setTransform(1,0,0,1,sx,sy);
 
-    // Simple pleasant sky gradient
+    // Pleasant sky gradient
     const g=ctx.createLinearGradient(0,0,0,H);
     g.addColorStop(0,'#69c3ff'); g.addColorStop(1,'#a8e0ff');
     ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
@@ -361,12 +387,13 @@
     const stripeOffset=(frames*baseSpeed*0.6)%32; ctx.fillStyle='#3a7d24';
     for(let xg=-stripeOffset;xg<W;xg+=32) ctx.fillRect(xg,GY+24,22,6);
 
-    // Obstacles & others
+    // Entities
     for(const o of obs){
       if(o.type==='pipe'){ drawPipe(o); }
       else if(o.type==='guy'){ drawGuy(o); }
       else if(o.type==='coin'){ drawCoin(o); }
       else if(o.type==='poop'){ drawPoop(o); }
+      else if(o.type==='egg'){ drawEgg(o); }
     }
 
     // Particles
@@ -375,6 +402,22 @@
     // Hen
     drawHen();
 
+    // HEADSHOT popups (outline + fill)
+    for(const h of pops){
+      ctx.save();
+      ctx.translate(h.x, h.y);
+      ctx.scale(h.scale, h.scale);
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.lineWidth=4;
+      ctx.globalAlpha = Math.max(0, h.a);
+      ctx.font='bold 22px system-ui,sans-serif';
+      ctx.strokeStyle='rgba(0,0,0,.75)';
+      ctx.strokeText('HEADSHOT!', 0, 0);
+      ctx.fillStyle='#fff64d';
+      ctx.fillText('HEADSHOT!', 0, 0);
+      ctx.restore();
+    }
+
     // Level banner
     if(levelAnim>0){ levelAnim--; const t=levelAnim/34, alpha=0.2+0.8*(1-t), scale=1+0.2*Math.sin((1-t)*Math.PI);
       ctx.save(); ctx.globalAlpha=alpha; ctx.translate(W/2,72); ctx.scale(scale,scale);
@@ -382,7 +425,7 @@
       ctx.font='bold 20px system-ui,sans-serif'; ctx.fillText('LEVEL UP!  →  '+level, 0, 0); ctx.restore();
     }
 
-    // Power Play HUD glow
+    // Power glow
     if(powerTimer>0){
       const t = powerTimer/300;
       ctx.save();
@@ -431,13 +474,16 @@
     ctx.strokeStyle='#ffef9a'; ctx.stroke();
     ctx.fillStyle='#fff'; const t=o.sparkle; const gx=o.x+o.w/2+Math.cos(t*8)*3, gy=o.y+o.h/2+Math.sin(t*8)*3; ctx.fillRect(gx,gy,2,2);
   }
+  function drawEgg(o){
+    ctx.save(); ctx.translate(o.x+o.w/2, o.y+o.h/2); ctx.rotate(Math.sin(o.spin)*0.3);
+    ctx.globalAlpha=0.35; ctx.fillStyle='#fff7a6'; ctx.beginPath(); ctx.ellipse(0,0,14,10,0,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+    ctx.fillStyle='#fffbe6'; ctx.beginPath(); ctx.ellipse(0,0,8,10,0,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
   function drawPoop(o){
     ctx.save(); ctx.translate(o.x,o.y); ctx.rotate(o.rot);
-    ctx.fillStyle='#6b4e2e';
-    ctx.beginPath();
-    ctx.moveTo(0,0); ctx.arc(0,-4,4,0,Math.PI*2);
-    ctx.arc(0,-1,6,0,Math.PI*2); // lil swirl
-    ctx.fill();
+    ctx.fillStyle='#f5f5f5'; // WHITE poop
+    ctx.beginPath(); ctx.arc(0,-3,3,0,Math.PI*2); ctx.arc(0,0,5,0,Math.PI*2); ctx.fill();
     ctx.restore();
   }
   function drawSnake(s){
@@ -451,8 +497,8 @@
   }
   function drawHen(){
     const bx=px, by=py, bw=pw, bh=ph, cx=bx+bw/2, cy=by+bh/2;
-    let blinkAlpha = (invuln>0 && Math.floor(invuln/4)%2===0) ? 0.35 : 1; // blink when invuln
-    ctx.save(); ctx.globalAlpha = blinkAlpha;
+    const blinkAlpha = (invuln>0 && Math.floor(invuln/4)%2===0) ? 0.35 : 1;
+    ctx.save(); ctx.globalAlpha=blinkAlpha;
     ctx.translate(cx,cy); ctx.scale(stretch + popPulse*0.08, squash - popPulse*0.08); ctx.translate(-cx,-cy);
 
     // shadow
@@ -462,19 +508,19 @@
     const k = Math.sin(runPhase)*3; ctx.fillStyle='#f5a623';
     ctx.fillRect(bx+3+k, by+bh-9, 4, 9); ctx.fillRect(bx+bw-7-k, by+bh-9, 4, 9);
 
-    // body (white)
+    // body
     ctx.fillStyle='#ffffff'; ctx.beginPath(); ctx.ellipse(bx+bw/2, by+bh/2, bw*0.62, bh*0.56, 0, 0, Math.PI*2); ctx.fill();
 
-    // wing (flap on jump)
+    // wing
     const wf = 1 + wingFlap*0.8;
     ctx.fillStyle='#ececec'; ctx.beginPath(); ctx.ellipse(bx+bw/2-4, by+bh/2, 7, 5*wf, -0.35, 0, Math.PI*2); ctx.fill();
 
-    // head + comb + beak
+    // head + comb
     ctx.fillStyle='#ffffff'; ctx.beginPath(); ctx.ellipse(bx+bw/2+7, by+6, 7, 7, 0, 0, Math.PI*2); ctx.fill();
     ctx.fillStyle='#e74c3c'; ctx.beginPath(); ctx.arc(bx+bw/2+7, by-1, 3, 0, Math.PI*2); ctx.fill();
     ctx.beginPath(); ctx.arc(bx+bw/2+11, by+1, 2.4, 0, Math.PI*2); ctx.fill();
 
-    // beak + tongue on jump
+    // beak + tiny tongue on jump
     ctx.fillStyle='#f1c40f'; ctx.beginPath(); ctx.moveTo(bx+bw/2+14, by+6); ctx.lineTo(bx+bw/2+9, by+8); ctx.lineTo(bx+bw/2+14, by+10); ctx.closePath(); ctx.fill();
     if(popPulse>0.2){ ctx.fillStyle='#ff6b6b'; ctx.fillRect(bx+bw/2+12, by+9, 2, 2); }
 
@@ -488,7 +534,6 @@
 
     ctx.restore();
 
-    // pop ring
     if(popRing>0.05){
       const r = 10 + (1-popRing)*22;
       ctx.globalAlpha = popRing*0.4; ctx.strokeStyle = '#ffffff';
