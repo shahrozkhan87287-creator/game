@@ -3,221 +3,120 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Shahroz’s Simple Runner</title>
+<title>Shahroz’s Tiny Runner</title>
 <style>
-  body{margin:0;background:#0b0f24;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
-  .wrap{max-width:740px;margin:0 auto;padding:10px}
-  .hud{display:flex;justify-content:space-between;gap:8px;margin:8px 0;flex-wrap:wrap}
-  .pill{background:#0008;border:1px solid #ffffff30;border-radius:12px;padding:8px 12px;font-weight:900}
-  #game{display:block;width:100%;height:auto;border:1px solid #ffffff22;border-radius:12px;box-shadow:0 14px 40px rgba(0,0,0,.55);background:#89d6ff}
-  .tip{opacity:.9;text-align:center;font-size:12px;margin-top:6px}
-  noscript{display:block; text-align:center; margin-top:10px; color:#ffb4b4}
+  body{margin:0;background:#111;color:#eee;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
+  .wrap{max-width:640px;margin:0 auto;padding:8px}
+  .bar{display:flex;justify-content:space-between;margin:8px 0}
+  #game{display:block;width:100%;height:auto;border:1px solid #333;background:#87ceeb;border-radius:8px}
+  .note{opacity:.85;text-align:center;font-size:12px;margin-top:6px}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="hud">
-    <div class="pill">Score: <span id="score">0</span></div>
-    <div class="pill">Best: <span id="best">0</span></div>
-    <div class="pill">Created by <b>Shahroz Khan</b></div>
-  </div>
-  <!-- Fixed size keeps physics stable everywhere -->
-  <canvas id="game" width="640" height="360" aria-label="Shahroz’s Simple Runner"></canvas>
-  <div class="tip">Jump: Space / ↑ / Tap • Avoid green blocks • Enter/Tap to restart</div>
-  <noscript>This game needs JavaScript enabled.</noscript>
+  <div class="bar"><div>Score: <span id="s">0</span></div><div>Created by <b>Shahroz Khan</b></div></div>
+  <canvas id="game" width="640" height="360"></canvas>
+  <div class="note">Jump with Space / ↑ / Tap • Avoid the green block</div>
 </div>
 
 <script>
 (function(){
-  const cv = document.getElementById('game');
-  const ctx = cv.getContext('2d');
-  const W = cv.width, H = cv.height;
+  const c = document.getElementById('game');
+  const x = c.getContext ? c.getContext('2d') : null;
+  if(!x){ document.body.insertAdjacentHTML('beforeend','<p style="color:#f66;text-align:center">Canvas not supported or JS blocked.</p>'); return; }
 
-  // --- Ground & Colors (hex only; no CSS vars in JS) ---
-  const GY = H - 56;
-  const SKY1 = '#6ec9ff', SKY2 = '#89d6ff';
-  const GROUND = '#67b34d', DIRT = '#3d7a2f';
-  const PIPE = '#2ecc71', PIPE_RIM = '#27ae60';
-  const PLAYER = '#ff6b6b', HAT = '#e74c3c';
-  const TEXT = '#ffffff';
+  // --- constants ---
+  const W=c.width, H=c.height, GY=H-40; // ground y
+  const GRAV=0.6, JUMP=-11, FALLMAX=14;
 
-  // --- HUD / High score ---
-  const scoreEl = document.getElementById('score');
-  const bestEl  = document.getElementById('best');
-  let best = +localStorage.getItem('sr_simple_best') || 0;
-  bestEl.textContent = best;
+  // --- state ---
+  let px=120, py=GY-24, pw=24, ph=24, pvy=0, on=true, hold=false, buf=0, coyote=0;
+  let ox=W+20, oy=GY-24, ow=28, oh=24, speed=4; // one obstacle
+  let score=0; const scoreEl=document.getElementById('s');
+  let running=true, t=0;
 
-  // --- Player ---
-  const P = { x:120, y:GY-28, w:22, h:28, vy:0, on:true, hold:false, buf:0, coyote:0 };
-  const GRAV = 0.55, JUMP = -10.2, HOLD = -0.25, FALL_MAX = 12.5;
-
-  // --- World ---
-  let running = false, over = false, t = 0, speed = 3.2, score = 0;
-  const objs = []; // {type:'pipe'|'coin', x,y,w,h, passed?, taken?}
-
-  // --- Input (one button) ---
-  let wantJump = false;
-  function press(){ wantJump = true; P.hold = true; if(!running) start(); }
-  function release(){ P.hold = false; }
-  cv.addEventListener('pointerdown', press, {passive:true});
+  // --- input: one button jump ---
+  let want=false;
+  function press(){ want=true; hold=true; }
+  function release(){ hold=false; }
+  c.addEventListener('pointerdown', press, {passive:true});
   addEventListener('pointerup', release, {passive:true});
   addEventListener('keydown', e=>{
     if(e.repeat) return;
-    if(e.code==='Space'||e.code==='ArrowUp'||e.code==='KeyW') press();
-    if((e.code==='Enter'||e.code==='NumpadEnter') && !running) start();
+    if(e.code==='Space'||e.code==='ArrowUp') press();
   });
   addEventListener('keyup', e=>{
-    if(e.code==='Space'||e.code==='ArrowUp'||e.code==='KeyW') release();
+    if(e.code==='Space'||e.code==='ArrowUp') release();
   });
 
-  // --- Utils ---
-  const rnd=(a,b)=>Math.random()*(b-a)+a, irnd=(a,b)=>Math.floor(rnd(a,b));
-  const hit=(ax,ay,aw,ah,bx,by,bw,bh)=> ax<bx+bw && ax+aw>bx && ay<by+bh && ay+ah>by;
-
-  // --- Spawning ---
-  function spawnPipe(x){
-    const h = irnd(34, 64);
-    objs.push({type:'pipe', x, y:GY-h, w:36, h, passed:false});
-  }
-  function spawnCoin(x,y){
-    objs.push({type:'coin', x, y, w:14, h:14, taken:false});
-  }
-  function spawnChunk(x){
-    if(Math.random()<0.6){
-      spawnPipe(x);
-      if(Math.random()<0.7) spawnCoin(x+10, GY - irnd(90,130));
-    }else{
-      spawnPipe(x);
-      spawnPipe(x + irnd(90,130));
-      if(Math.random()<0.5) spawnCoin(x+50, GY - irnd(110,140));
-    }
+  // --- tiny helpers ---
+  function hit(ax,ay,aw,ah,bx,by,bw,bh){
+    return ax<bx+bw && ax+aw>bx && ay<by+bh && ay+ah>by;
   }
 
-  // --- Game control ---
-  function start(){
-    running = true; over = false; t = 0; speed = 3.2; score = 0;
-    P.x = 120; P.y = GY - P.h; P.vy = 0; P.on = true; P.hold=false; P.buf=0; P.coyote=0; wantJump=false;
-    objs.length = 0;
-    // prime a few obstacles
-    let x = 460;
-    for(let i=0;i<5;i++){ spawnChunk(x); x += irnd(220, 320); }
-    scoreEl.textContent = '0';
-  }
+  // --- loop ---
+  function step(){
+    if(!running) return draw(true);
 
-  function gameOver(){
-    running = false; over = true;
-    if(score > best){ best = score; localStorage.setItem('sr_simple_best', best); bestEl.textContent = best; }
-    draw(true);
-  }
-
-  // --- Loop ---
-  function update(){
-    if(!running){ draw(false); requestAnimationFrame(update); return; }
     t++;
 
-    // Jump buffer + coyote time
-    if(wantJump){ P.buf = 8; wantJump = false; }
-    if(P.on) P.coyote = 6; else if(P.coyote>0) P.coyote--;
+    // buffered jump + coyote
+    if(want){ buf=6; want=false; }
+    if(on) coyote=5; else if(coyote>0) coyote--;
 
-    if(P.buf>0){
-      if(P.on || P.coyote>0){ P.vy = JUMP; P.on=false; P.buf=0; }
-      else P.buf--;
-    }
-    if(P.hold && P.vy < 0) P.vy += HOLD;
-
-    // Physics
-    P.vy += GRAV; if(P.vy>FALL_MAX) P.vy = FALL_MAX;
-    P.y += P.vy;
-    if(P.y + P.h >= GY){ P.y = GY - P.h; P.vy = 0; P.on=true; } else P.on=false;
-
-    // Move obstacles & scoring
-    for(const o of objs){
-      o.x -= speed;
-      if(o.type==='pipe' && !o.passed && o.x + o.w < P.x - P.w/2){
-        o.passed = true; score += 1; scoreEl.textContent = score;
-      }
+    if(buf>0){
+      if(on||coyote>0){ pvy=JUMP; on=false; buf=0; }
+      else buf--;
     }
 
-    // Despawn + Spawn
-    while(objs.length && objs[0].x < -80) objs.shift();
-    const lastX = objs.length ? objs[objs.length-1].x : 420;
-    if(lastX < W + 60) spawnChunk(W + irnd(140, 260));
+    // physics
+    if(hold && pvy<0) pvy+=-0.25;   // variable jump height
+    pvy+=GRAV; if(pvy>FALLMAX) pvy=FALLMAX;
+    py+=pvy;
+    if(py+ph>=GY){ py=GY-ph; pvy=0; on=true; } else on=false;
 
-    // Collisions
-    for(let i=objs.length-1;i>=0;i--){
-      const o = objs[i];
-      if(o.type==='coin'){
-        if(!o.taken && hit(P.x,P.y,P.w,P.h, o.x,o.y,o.w,o.h)){
-          o.taken = true; score += 5; scoreEl.textContent = score; objs.splice(i,1);
-        }
-      }else{ // pipe
-        if(hit(P.x,P.y,P.w,P.h, o.x,o.y,o.w,o.h)){ gameOver(); return; }
-      }
-    }
+    // obstacle moves left; respawn when past
+    ox-=speed;
+    if(ox+ow<0){ ox=W+Math.random()*120; score++; scoreEl.textContent=score; }
 
-    // Level up speed
-    if(t % 240 === 0) speed = Math.min(7.2, speed + 0.25);
+    // simple difficulty ramp
+    if(t%360===0) speed=Math.min(7, speed+0.4);
+
+    // collision
+    if(hit(px,py,pw,ph, ox,oy,ow,oh)){ running=false; }
 
     draw(false);
-    requestAnimationFrame(update);
+    requestAnimationFrame(step);
   }
 
-  // --- Drawing ---
-  function draw(showOver){
-    // Sky (simple solid to avoid any gradient compatibility issues)
-    ctx.fillStyle = SKY2;
-    ctx.fillRect(0,0,W,H);
+  function draw(over){
+    // sky
+    x.fillStyle='#87ceeb'; x.fillRect(0,0,W,H);
+    // ground
+    x.fillStyle='#5daa2a'; x.fillRect(0,GY,W,H-GY);
 
-    // Ground
-    ctx.fillStyle = GROUND; ctx.fillRect(0, GY, W, H-GY);
-    ctx.fillStyle = DIRT; for(let x=0;x<W;x+=32) ctx.fillRect(x, GY+22, 22, 6);
+    // obstacle (pipe-like block)
+    x.fillStyle='#2ecc71'; x.fillRect(ox,oy,ow,oh);
+    x.fillStyle='#27ae60'; x.fillRect(ox-4,oy-6,ow+8,6);
 
-    // Obstacles
-    for(const o of objs){
-      if(o.type==='pipe'){
-        ctx.fillStyle = PIPE; ctx.fillRect(o.x, o.y, o.w, o.h);
-        ctx.fillStyle = PIPE_RIM; ctx.fillRect(o.x-6, o.y-10, o.w+12, 10);
-        ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.strokeRect(o.x, o.y, o.w, o.h);
-      }else{ // coin
-        ctx.fillStyle = '#ffd166';
-        ctx.beginPath(); ctx.arc(o.x+o.w/2, o.y+o.h/2, o.w/2, 0, Math.PI*2); ctx.fill();
-        ctx.strokeStyle = '#ffef9a'; ctx.stroke();
-      }
-    }
-
-    // Player (body + hat)
+    // player (red square + hat)
     // shadow
-    ctx.fillStyle='rgba(0,0,0,.15)';
-    ctx.beginPath(); ctx.ellipse(P.x + P.w/2, P.y + P.h + 6, 16, 6, 0, 0, Math.PI*2); ctx.fill();
+    x.fillStyle='rgba(0,0,0,.15)'; x.beginPath(); x.ellipse(px+pw/2, py+ph+6, 14, 5, 0, 0, Math.PI*2); x.fill();
     // body
-    ctx.fillStyle = PLAYER; roundRect(P.x, P.y, P.w, P.h, 4); ctx.fill();
-    ctx.fillStyle = HAT; ctx.fillRect(P.x-2, P.y-6, P.w+4, 6);
+    x.fillStyle='#ff6b6b'; x.fillRect(px,py,pw,ph);
+    x.fillStyle='#e74c3c'; x.fillRect(px-2,py-6,pw+4,6);
 
-    if(showOver){
-      ctx.fillStyle='rgba(0,0,0,.55)';
-      ctx.fillRect(W/2-140, H/2-60, 280, 120);
-      ctx.strokeStyle='#ffffff33'; ctx.strokeRect(W/2-140, H/2-60, 280, 120);
-      ctx.fillStyle=TEXT; ctx.font='bold 26px system-ui, sans-serif';
-      ctx.textAlign='center'; ctx.textBaseline='middle';
-      ctx.fillText('GAME OVER', W/2, H/2-12);
-      ctx.font='16px system-ui, sans-serif';
-      ctx.fillText('Press Enter / Tap to restart', W/2, H/2+20);
+    if(over){
+      x.fillStyle='rgba(0,0,0,.55)'; x.fillRect(W/2-140,H/2-50,280,100);
+      x.strokeStyle='#fff3'; x.strokeRect(W/2-140,H/2-50,280,100);
+      x.fillStyle='#fff'; x.textAlign='center'; x.textBaseline='middle';
+      x.font='bold 26px system-ui,sans-serif'; x.fillText('GAME OVER', W/2, H/2-8);
+      x.font='14px system-ui,sans-serif'; x.fillText('Tap or press Space to jump again (reload to reset)', W/2, H/2+20);
     }
   }
 
-  function roundRect(x,y,w,h,r){
-    ctx.beginPath();
-    ctx.moveTo(x+r,y);
-    ctx.arcTo(x+w,y,x+w,y+h,r);
-    ctx.arcTo(x+w,y+h,x,y+h,r);
-    ctx.arcTo(x,y+h,x,y,r);
-    ctx.arcTo(x,y,x+w,y,r);
-    ctx.closePath();
-  }
-
-  // Start immediately so you always see something
-  start();
-  requestAnimationFrame(update);
+  // start immediately
+  requestAnimationFrame(step);
 })();
 </script>
 </body>
