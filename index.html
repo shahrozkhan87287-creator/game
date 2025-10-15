@@ -1,22 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-<title>Shahroz’s Run</title>
-<meta name="description" content="Simple one-button runner. Jump pipes, grab coins. Created by Shahroz Khan.">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Shahroz’s Simple Runner</title>
 <style>
-  :root{
-    --ui:#0b0f24; --sky1:#79c9ff; --sky2:#a8deff; --ground:#67b34d; --dirt:#3d7a2f;
-    --pipe1:#2ecc71; --pipe2:#27ae60; --coin:#ffd166; --coin2:#ffef9a; --player:#ff6b6b; --hat:#e74c3c;
-  }
-  *{box-sizing:border-box}
-  html,body{height:100%;margin:0;background:var(--ui);color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
-  .wrap{max-width:760px;margin:0 auto;padding:10px}
+  body{margin:0;background:#0b0f24;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
+  .wrap{max-width:740px;margin:0 auto;padding:10px}
   .hud{display:flex;justify-content:space-between;gap:8px;margin:8px 0;flex-wrap:wrap}
-  .pill{background:#0008;border:1px solid #ffffff2a;border-radius:12px;padding:8px 12px;font-weight:900}
-  #game{display:block;width:100%;height:auto;border:1px solid #ffffff22;border-radius:12px;box-shadow:0 14px 40px rgba(0,0,0,.55);background:#8fd3ff;touch-action:manipulation}
+  .pill{background:#0008;border:1px solid #ffffff30;border-radius:12px;padding:8px 12px;font-weight:900}
+  #game{display:block;width:100%;height:auto;border:1px solid #ffffff22;border-radius:12px;box-shadow:0 14px 40px rgba(0,0,0,.55);background:#89d6ff}
   .tip{opacity:.9;text-align:center;font-size:12px;margin-top:6px}
+  noscript{display:block; text-align:center; margin-top:10px; color:#ffb4b4}
 </style>
 </head>
 <body>
@@ -26,281 +21,190 @@
     <div class="pill">Best: <span id="best">0</span></div>
     <div class="pill">Created by <b>Shahroz Khan</b></div>
   </div>
-  <!-- Fixed logical canvas to keep physics consistent on all devices -->
-  <canvas id="game" width="720" height="400" aria-label="Shahroz’s Run"></canvas>
-  <div class="tip">Tap / Click / Space / ↑ to JUMP • Avoid pipes • Grab ⭐ • Press Enter or tap to restart</div>
+  <!-- Fixed size keeps physics stable everywhere -->
+  <canvas id="game" width="640" height="360" aria-label="Shahroz’s Simple Runner"></canvas>
+  <div class="tip">Jump: Space / ↑ / Tap • Avoid green blocks • Enter/Tap to restart</div>
+  <noscript>This game needs JavaScript enabled.</noscript>
 </div>
 
 <script>
-(() => {
-  // ========= Canvas & UI =========
+(function(){
   const cv = document.getElementById('game');
   const ctx = cv.getContext('2d');
   const W = cv.width, H = cv.height;
-  const HUD = { score: document.getElementById('score'), best: document.getElementById('best') };
 
-  // ========= Game Constants =========
-  const GROUND_Y = H - 56;
-  const PHYS_DT = 1000 / 60; // fixed timestep (ms)
-  const GRAV = 0.55;
-  const JUMP_VY = -10.4;
-  const HOLD_GRAV_REDUCE = -0.26; // holding jump trims gravity briefly
-  const FALL_MAX = 13;
+  // --- Ground & Colors (hex only; no CSS vars in JS) ---
+  const GY = H - 56;
+  const SKY1 = '#6ec9ff', SKY2 = '#89d6ff';
+  const GROUND = '#67b34d', DIRT = '#3d7a2f';
+  const PIPE = '#2ecc71', PIPE_RIM = '#27ae60';
+  const PLAYER = '#ff6b6b', HAT = '#e74c3c';
+  const TEXT = '#ffffff';
 
-  const SPEED_START = 3.1;
-  const SPEED_MAX   = 7.2;
+  // --- HUD / High score ---
+  const scoreEl = document.getElementById('score');
+  const bestEl  = document.getElementById('best');
+  let best = +localStorage.getItem('sr_simple_best') || 0;
+  bestEl.textContent = best;
 
-  // ========= Helpers =========
-  const rnd  = (a,b)=>Math.random()*(b-a)+a;
-  const irnd = (a,b)=>Math.floor(rnd(a,b));
-  const clamp= (v,a,b)=>Math.max(a,Math.min(b,v));
-  const hit  = (ax,ay,aw,ah, bx,by,bw,bh)=> ax<bx+bw && ax+aw>bx && ay<by+bh && ay+ah>by;
+  // --- Player ---
+  const P = { x:120, y:GY-28, w:22, h:28, vy:0, on:true, hold:false, buf:0, coyote:0 };
+  const GRAV = 0.55, JUMP = -10.2, HOLD = -0.25, FALL_MAX = 12.5;
 
-  // ========= Entities =========
-  class Player {
-    constructor(){ this.reset(); }
-    reset(){
-      this.w=22; this.h=28;
-      this.x=120; this.y=GROUND_Y-this.h;
-      this.vy=0; this.onGround=true;
-      this.jumpHeld=false; this.buf=0; this.coyote=0;
-    }
-    wantJump(){ this.buf = 8; } // frames of buffer
-    update(){
-      // coyote time
-      if(this.onGround) this.coyote = 6; else if(this.coyote>0) this.coyote--;
+  // --- World ---
+  let running = false, over = false, t = 0, speed = 3.2, score = 0;
+  const objs = []; // {type:'pipe'|'coin', x,y,w,h, passed?, taken?}
 
-      // consume jump buffer
-      if(this.buf>0){
-        if(this.onGround || this.coyote>0){
-          this.vy = JUMP_VY; this.onGround=false; this.buf=0;
-        }else{
-          this.buf--;
-        }
-      }
-
-      // variable jump height
-      if(this.jumpHeld && this.vy < 0) this.vy += HOLD_GRAV_REDUCE;
-
-      // gravity
-      this.vy += GRAV;
-      if(this.vy>FALL_MAX) this.vy=FALL_MAX;
-      this.y += this.vy;
-
-      // ground
-      if(this.y + this.h >= GROUND_Y){
-        this.y = GROUND_Y - this.h;
-        this.vy = 0; this.onGround=true;
-      } else { this.onGround=false; }
-    }
-    rect(){ return {x:this.x, y:this.y, w:this.w, h:this.h}; }
-  }
-
-  class Pipe {
-    constructor(x){
-      this.type='pipe';
-      this.w=36; this.h=irnd(34,64);
-      this.x=x; this.y=GROUND_Y - this.h;
-      this.passed=false;
-    }
-    update(s){ this.x -= s; }
-    draw(){
-      ctx.fillStyle='var(--pipe1)'; ctx.fillRect(this.x,this.y,this.w,this.h);
-      ctx.fillStyle='var(--pipe2)'; ctx.fillRect(this.x-6,this.y-10,this.w+12,10);
-      ctx.strokeStyle='rgba(0,0,0,.25)'; ctx.strokeRect(this.x,this.y,this.w,this.h);
-    }
-  }
-
-  class Coin {
-    constructor(x,y){ this.type='coin'; this.w=14; this.h=14; this.x=x; this.y=y; this.taken=false; }
-    update(s){ this.x -= s; }
-    draw(){
-      ctx.fillStyle='var(--coin)'; ctx.beginPath();
-      ctx.arc(this.x+this.w/2, this.y+this.h/2, this.w/2, 0, Math.PI*2); ctx.fill();
-      ctx.strokeStyle='var(--coin2)'; ctx.stroke();
-    }
-  }
-
-  // ========= World / State =========
-  const State = {
-    READY: 0, RUN: 1, OVER: 2
-  };
-  let game = {
-    mode: State.READY,
-    speed: SPEED_START,
-    score: 0,
-    t: 0,
-    clouds: [],
-    objects: [],
-    player: new Player(),
-    best: +(localStorage.getItem('sr_best')||0)
-  };
-  HUD.best.textContent = game.best;
-
-  function reset(){
-    game.mode = State.RUN;
-    game.speed = SPEED_START;
-    game.score = 0; HUD.score.textContent = 0;
-    game.t = 0;
-    game.player.reset();
-    game.objects.length=0; game.clouds.length=0;
-
-    // clouds
-    for(let i=0;i<6;i++) game.clouds.push({x: irnd(0,W), y: irnd(20,120), s: rnd(0.5,1.2)});
-
-    // prime obstacles
-    let x = 460;
-    for(let i=0;i<5;i++){ spawnChunk(x); x += irnd(220, 320); }
-  }
-
-  function gameOver(){
-    game.mode = State.OVER;
-    if(game.score > game.best){
-      game.best = game.score;
-      localStorage.setItem('sr_best', game.best);
-      HUD.best.textContent = game.best;
-    }
-  }
-
-  // ========= Spawning =========
-  function spawnChunk(x){
-    if(Math.random()<0.6){
-      // one pipe, maybe a coin above
-      game.objects.push(new Pipe(x));
-      if(Math.random()<0.7) game.objects.push(new Coin(x+10, GROUND_Y - irnd(90,130)));
-    } else {
-      // two pipes, maybe a coin
-      game.objects.push(new Pipe(x));
-      game.objects.push(new Pipe(x + irnd(90,130)));
-      if(Math.random()<0.5) game.objects.push(new Coin(x+50, GROUND_Y - irnd(110,140)));
-    }
-  }
-
-  // ========= Input (one button) =========
+  // --- Input (one button) ---
   let wantJump = false;
-  function press(){ wantJump=true; game.player.jumpHeld=true; if(game.mode===State.READY) reset(); if(game.mode===State.OVER) reset(); }
-  function release(){ game.player.jumpHeld=false; }
+  function press(){ wantJump = true; P.hold = true; if(!running) start(); }
+  function release(){ P.hold = false; }
   cv.addEventListener('pointerdown', press, {passive:true});
   addEventListener('pointerup', release, {passive:true});
   addEventListener('keydown', e=>{
     if(e.repeat) return;
     if(e.code==='Space'||e.code==='ArrowUp'||e.code==='KeyW') press();
-    if((e.code==='Enter'||e.code==='NumpadEnter') && game.mode!==State.RUN) reset();
+    if((e.code==='Enter'||e.code==='NumpadEnter') && !running) start();
   });
   addEventListener('keyup', e=>{
     if(e.code==='Space'||e.code==='ArrowUp'||e.code==='KeyW') release();
   });
 
-  // ========= Game Loop (fixed timestep) =========
-  let last = performance.now(), acc = 0;
-  function loop(now){
-    const dt = now - last; last = now; acc += dt;
-    while(acc >= PHYS_DT){ step(); acc -= PHYS_DT; }
-    draw();
-    requestAnimationFrame(loop);
+  // --- Utils ---
+  const rnd=(a,b)=>Math.random()*(b-a)+a, irnd=(a,b)=>Math.floor(rnd(a,b));
+  const hit=(ax,ay,aw,ah,bx,by,bw,bh)=> ax<bx+bw && ax+aw>bx && ay<by+bh && ay+ah>by;
+
+  // --- Spawning ---
+  function spawnPipe(x){
+    const h = irnd(34, 64);
+    objs.push({type:'pipe', x, y:GY-h, w:36, h, passed:false});
   }
-  requestAnimationFrame(loop);
-
-  function step(){
-    if(game.mode !== State.RUN) return;
-
-    game.t++;
-
-    // feed jump buffer
-    if(wantJump){ game.player.wantJump(); wantJump=false; }
-
-    // player
-    game.player.update();
-
-    // clouds
-    for(const c of game.clouds){
-      c.x -= game.speed*0.25*c.s; if(c.x<-60){ c.x=W+40; c.y=irnd(20,120); c.s=rnd(0.5,1.2); }
+  function spawnCoin(x,y){
+    objs.push({type:'coin', x, y, w:14, h:14, taken:false});
+  }
+  function spawnChunk(x){
+    if(Math.random()<0.6){
+      spawnPipe(x);
+      if(Math.random()<0.7) spawnCoin(x+10, GY - irnd(90,130));
+    }else{
+      spawnPipe(x);
+      spawnPipe(x + irnd(90,130));
+      if(Math.random()<0.5) spawnCoin(x+50, GY - irnd(110,140));
     }
+  }
 
-    // objects
-    for(const o of game.objects) o.update(game.speed);
+  // --- Game control ---
+  function start(){
+    running = true; over = false; t = 0; speed = 3.2; score = 0;
+    P.x = 120; P.y = GY - P.h; P.vy = 0; P.on = true; P.hold=false; P.buf=0; P.coyote=0; wantJump=false;
+    objs.length = 0;
+    // prime a few obstacles
+    let x = 460;
+    for(let i=0;i<5;i++){ spawnChunk(x); x += irnd(220, 320); }
+    scoreEl.textContent = '0';
+  }
 
-    // score when passing pipes
-    for(const o of game.objects){
-      if(o.type==='pipe' && !o.passed && o.x + o.w < game.player.x - game.player.w/2){
-        o.passed = true; game.score += 1; HUD.score.textContent = game.score;
+  function gameOver(){
+    running = false; over = true;
+    if(score > best){ best = score; localStorage.setItem('sr_simple_best', best); bestEl.textContent = best; }
+    draw(true);
+  }
+
+  // --- Loop ---
+  function update(){
+    if(!running){ draw(false); requestAnimationFrame(update); return; }
+    t++;
+
+    // Jump buffer + coyote time
+    if(wantJump){ P.buf = 8; wantJump = false; }
+    if(P.on) P.coyote = 6; else if(P.coyote>0) P.coyote--;
+
+    if(P.buf>0){
+      if(P.on || P.coyote>0){ P.vy = JUMP; P.on=false; P.buf=0; }
+      else P.buf--;
+    }
+    if(P.hold && P.vy < 0) P.vy += HOLD;
+
+    // Physics
+    P.vy += GRAV; if(P.vy>FALL_MAX) P.vy = FALL_MAX;
+    P.y += P.vy;
+    if(P.y + P.h >= GY){ P.y = GY - P.h; P.vy = 0; P.on=true; } else P.on=false;
+
+    // Move obstacles & scoring
+    for(const o of objs){
+      o.x -= speed;
+      if(o.type==='pipe' && !o.passed && o.x + o.w < P.x - P.w/2){
+        o.passed = true; score += 1; scoreEl.textContent = score;
       }
     }
 
-    // cull & spawn ahead
-    while(game.objects.length && game.objects[0].x < -80) game.objects.shift();
-    const lastX = game.objects.length ? game.objects[game.objects.length-1].x : 420;
+    // Despawn + Spawn
+    while(objs.length && objs[0].x < -80) objs.shift();
+    const lastX = objs.length ? objs[objs.length-1].x : 420;
     if(lastX < W + 60) spawnChunk(W + irnd(140, 260));
 
-    // collisions
-    const pr = game.player.rect();
-    for(let i=game.objects.length-1;i>=0;i--){
-      const o = game.objects[i];
+    // Collisions
+    for(let i=objs.length-1;i>=0;i--){
+      const o = objs[i];
       if(o.type==='coin'){
-        if(!o.taken && hit(pr.x,pr.y,pr.w,pr.h, o.x,o.y,o.w,o.h)){
-          o.taken = true; game.score += 5; HUD.score.textContent = game.score; game.objects.splice(i,1);
+        if(!o.taken && hit(P.x,P.y,P.w,P.h, o.x,o.y,o.w,o.h)){
+          o.taken = true; score += 5; scoreEl.textContent = score; objs.splice(i,1);
         }
-      } else { // pipe
-        if(hit(pr.x,pr.y,pr.w,pr.h, o.x,o.y,o.w,o.h)){ gameOver(); break; }
+      }else{ // pipe
+        if(hit(P.x,P.y,P.w,P.h, o.x,o.y,o.w,o.h)){ gameOver(); return; }
       }
     }
 
-    // difficulty ramp
-    if(game.t % 240 === 0) game.speed = Math.min(SPEED_MAX, game.speed + 0.25);
+    // Level up speed
+    if(t % 240 === 0) speed = Math.min(7.2, speed + 0.25);
+
+    draw(false);
+    requestAnimationFrame(update);
   }
 
-  // ========= Render =========
-  function draw(){
-    // sky gradient
-    const sky = ctx.createLinearGradient(0,0,0,H);
-    sky.addColorStop(0,'var(--sky1)'); sky.addColorStop(1,'var(--sky2)');
-    ctx.fillStyle = sky; ctx.fillRect(0,0,W,H);
+  // --- Drawing ---
+  function draw(showOver){
+    // Sky (simple solid to avoid any gradient compatibility issues)
+    ctx.fillStyle = SKY2;
+    ctx.fillRect(0,0,W,H);
 
-    // clouds
-    for(const c of game.clouds){
-      ctx.fillStyle='rgba(255,255,255,.92)'; cloud(c.x,c.y,26*c.s);
+    // Ground
+    ctx.fillStyle = GROUND; ctx.fillRect(0, GY, W, H-GY);
+    ctx.fillStyle = DIRT; for(let x=0;x<W;x+=32) ctx.fillRect(x, GY+22, 22, 6);
+
+    // Obstacles
+    for(const o of objs){
+      if(o.type==='pipe'){
+        ctx.fillStyle = PIPE; ctx.fillRect(o.x, o.y, o.w, o.h);
+        ctx.fillStyle = PIPE_RIM; ctx.fillRect(o.x-6, o.y-10, o.w+12, 10);
+        ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.strokeRect(o.x, o.y, o.w, o.h);
+      }else{ // coin
+        ctx.fillStyle = '#ffd166';
+        ctx.beginPath(); ctx.arc(o.x+o.w/2, o.y+o.h/2, o.w/2, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = '#ffef9a'; ctx.stroke();
+      }
     }
 
-    // ground
-    ctx.fillStyle='var(--ground)'; ctx.fillRect(0,GROUND_Y,W,H-GROUND_Y);
-    ctx.fillStyle='var(--dirt)'; for(let x=0;x<W;x+=32) ctx.fillRect(x,GROUND_Y+22,22,6);
-
-    // objects
-    for(const o of game.objects) o.draw();
-
-    // player
-    drawPlayer(game.player);
-
-    // overlays for READY/OVER
-    if(game.mode !== State.RUN){
-      ctx.fillStyle='rgba(0,0,0,.55)';
-      ctx.fillRect(W/2-160, H/2-68, 320, 136);
-      ctx.strokeStyle='#ffffff33'; ctx.strokeRect(W/2-160, H/2-68, 320, 136);
-      ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.textBaseline='middle';
-      ctx.font='bold 26px system-ui, sans-serif';
-      ctx.fillText(game.mode===State.OVER?'GAME OVER':'TAP / SPACE TO START', W/2, H/2-10);
-      ctx.font='16px system-ui, sans-serif';
-      ctx.fillText('Jump pipes • Grab coins ⭐', W/2, H/2+22);
-    }
-  }
-
-  function drawPlayer(p){
+    // Player (body + hat)
     // shadow
     ctx.fillStyle='rgba(0,0,0,.15)';
-    ctx.beginPath(); ctx.ellipse(p.x + p.w/2, p.y + p.h + 6, 16, 6, 0, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(P.x + P.w/2, P.y + P.h + 6, 16, 6, 0, 0, Math.PI*2); ctx.fill();
     // body
-    ctx.fillStyle='var(--player)';
-    roundRect(p.x, p.y, p.w, p.h, 4); ctx.fill();
-    // hat
-    ctx.fillStyle='var(--hat)';
-    ctx.fillRect(p.x-2, p.y-6, p.w+4, 6);
+    ctx.fillStyle = PLAYER; roundRect(P.x, P.y, P.w, P.h, 4); ctx.fill();
+    ctx.fillStyle = HAT; ctx.fillRect(P.x-2, P.y-6, P.w+4, 6);
+
+    if(showOver){
+      ctx.fillStyle='rgba(0,0,0,.55)';
+      ctx.fillRect(W/2-140, H/2-60, 280, 120);
+      ctx.strokeStyle='#ffffff33'; ctx.strokeRect(W/2-140, H/2-60, 280, 120);
+      ctx.fillStyle=TEXT; ctx.font='bold 26px system-ui, sans-serif';
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText('GAME OVER', W/2, H/2-12);
+      ctx.font='16px system-ui, sans-serif';
+      ctx.fillText('Press Enter / Tap to restart', W/2, H/2+20);
+    }
   }
 
-  function cloud(x,y,r){
-    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.arc(x+r*0.7,y+r*0.3,r*0.7,0,Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.arc(x-r*0.7,y+r*0.35,r*0.6,0,Math.PI*2); ctx.fill();
-  }
   function roundRect(x,y,w,h,r){
     ctx.beginPath();
     ctx.moveTo(x+r,y);
@@ -311,8 +215,9 @@
     ctx.closePath();
   }
 
-  // Start in READY mode; user taps/presses to begin
-  game.mode = State.READY;
+  // Start immediately so you always see something
+  start();
+  requestAnimationFrame(update);
 })();
 </script>
 </body>
