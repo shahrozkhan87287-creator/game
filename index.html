@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Shahroz’s Tiny Runner+ (Cartoon + Difficulty)</title>
+<title>Shahroz’s Tiny Runner++</title>
 <style>
   body{margin:0;background:#111;color:#eee;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
   .wrap{max-width:640px;margin:0 auto;padding:8px}
@@ -20,7 +20,7 @@
     <div>Created by <b>Shahroz Khan</b></div>
   </div>
   <canvas id="game" width="640" height="360"></canvas>
-  <div class="note">Jump with Space / ↑ / Tap • Avoid the green pipes • Difficulty increases as you play</div>
+  <div class="note">Jump: Space / ↑ / Tap • Avoid pipes • Difficulty ramps • Enjoy the lil animations 😎</div>
 </div>
 
 <script>
@@ -31,17 +31,23 @@
 
   // --- constants ---
   const W=c.width, H=c.height, GY=H-40; // ground y
-  const GRAV=0.6, JUMP=-11, FALLMAX=14;
+  const GRAV=0.60, JUMP=-11.2, FALLMAX=14;
 
-  // --- player (cartoon) ---
-  // logical hitbox (simple rect), but we draw a cartoon on top
+  // --- player (cartoon) & animation state ---
   let px=120, py=GY-28, pw=24, ph=28, pvy=0, on=true, hold=false, buf=0, coyote=0;
+  let runPhase=0;               // leg swing
+  let squash=1, stretch=1;      // squash & stretch
+  let landCooldown=0;           // for extra squash on land
 
-  // --- obstacles (multiple now) ---
-  // each: {x,y,w,h}
+  // --- clouds & particles ---
+  const clouds=[];              // {x,y,s}
+  const particles=[];           // {x,y,vx,vy,a}
+
+  // --- obstacles (multiple) ---
+  // each: {x,y,w,h, bob?, bobA, bobS, bobT}
   const obs=[];
   let baseSpeed=4;           // ramps with level
-  let spawnCD=70;            // frames until next spawn (ramps down)
+  let spawnCD=64;            // frames until next spawn (ramps down)
   let spawnTimer=0;
 
   // --- score / level ---
@@ -51,6 +57,9 @@
 
   // --- running flag ---
   let running=true;
+
+  // --- near-miss shake ---
+  let shake=0;
 
   // --- input: one button jump ---
   let want=false;
@@ -72,21 +81,43 @@
   }
   function rand(a,b){ return Math.random()*(b-a)+a; }
   function irand(a,b){ return Math.floor(rand(a,b)); }
+  function emitDust(x0,y0,dir=1){
+    for(let i=0;i<6;i++){
+      particles.push({
+        x:x0, y:y0,
+        vx:(Math.random()*1.5+0.5)*dir,
+        vy:-Math.random()*1.5-0.2,
+        a:1
+      });
+    }
+  }
 
-  // spawn one or two pipes with varied size
+  // init clouds
+  for(let i=0;i<6;i++){ clouds.push({x:irand(0,W), y:irand(20,120), s:rand(0.4,1.2)}); }
+
+  // spawn one or two pipes with varied size & sometimes bobbing
   function spawnObstacle(){
     // width & height vary with level
-    const w = irand(24, 36 + Math.min(10, level));              // can get a bit wider
-    const h = irand(18 + Math.min(20, level*2), 38 + Math.min(28, level*2)); // taller over time
-    const y = GY - h;
+    const w = irand(24, 36 + Math.min(10, level));
+    const h = irand(18 + Math.min(22, level*2), 40 + Math.min(32, level*2));
+    let y  = GY - h;
 
-    obs.push({x: W + 10, y, w, h});
+    const o = {x: W + 10, y, w, h, bob:false, bobA:0, bobS:0, bobT:0};
+    // chance of subtle vertical bobbing on higher levels
+    if(Math.random() < Math.min(0.08 + level*0.02, 0.28)){
+      o.bob = true; o.bobA = rand(2,6); o.bobS = rand(0.02,0.05); o.bobT = Math.random()*Math.PI*2;
+    }
+    obs.push(o);
 
-    // small chance of a second back-to-back pipe (harder)
-    if(Math.random() < Math.min(0.1 + level*0.02, 0.35)){
-      const gap = irand(70 - Math.min(30, level*2), 110); // closer at higher level
+    // rare second pipe close behind (harder)
+    if(Math.random() < Math.min(0.08 + level*0.02, 0.33)){
+      const gap = irand(64 - Math.min(28, level*2), 110);
       const h2 = irand(18, 40 + Math.min(30, level*2));
-      obs.push({x: W + 10 + gap, y: GY - h2, w: irand(24, 36), h: h2});
+      const o2 = {x: W + 10 + gap, y: GY - h2, w: irand(24, 36), h: h2, bob:false, bobA:0, bobS:0, bobT:0};
+      if(Math.random() < Math.min(0.06 + level*0.02, 0.22)){
+        o2.bob = true; o2.bobA = rand(2,5); o2.bobS = rand(0.02,0.05); o2.bobT = Math.random()*Math.PI*2;
+      }
+      obs.push(o2);
     }
   }
 
@@ -96,28 +127,54 @@
 
     frames++;
 
-    // difficulty ramp (every ~10 seconds ≈ 600 frames @60fps)
-    if(frames % 600 === 0){
+    // difficulty ramp (every ~8s)
+    if(frames % 480 === 0){
       level++;
       lvlEl.textContent = level;
-      baseSpeed = Math.min(8.5, baseSpeed + 0.5);            // faster world
-      spawnCD   = Math.max(36, spawnCD - 6);                  // spawns more often
+      baseSpeed = Math.min(9.0, baseSpeed + 0.45);
+      spawnCD   = Math.max(34,  spawnCD - 5);   // more frequent spawns
     }
 
-    // buffered jump + coyote
-    if(want){ buf=6; want=false; }
+    // clouds
+    for(const c of clouds){
+      c.x -= baseSpeed * 0.25 * c.s;
+      if(c.x < -60){ c.x = W + 40; c.y = irand(20,120); c.s = rand(0.4,1.2); }
+    }
+
+    // jump buffer + coyote
+    if(want){ buf=7; want=false; }
     if(on) coyote=5; else if(coyote>0) coyote--;
 
     if(buf>0){
-      if(on||coyote>0){ pvy=JUMP; on=false; buf=0; }
-      else buf--;
+      if(on||coyote>0){
+        pvy=JUMP; on=false; buf=0;
+        squash=0.85; stretch=1.15;     // squash on takeoff
+        emitDust(px+pw/2, GY, (Math.random()<0.5?-1:1));
+      } else { buf--; }
     }
 
     // physics
-    if(hold && pvy<0) pvy+=-0.25;   // variable jump height
+    if(hold && pvy<0) pvy+=-0.25;      // variable jump height
     pvy+=GRAV; if(pvy>FALLMAX) pvy=FALLMAX;
+    const wasOn = on;
     py+=pvy;
     if(py+ph>=GY){ py=GY-ph; pvy=0; on=true; } else on=false;
+
+    // land effect
+    if(!wasOn && on){
+      landCooldown=6;
+      squash=1.2; stretch=0.85;        // squash on landing
+      emitDust(px+pw/2, GY, (Math.random()<0.5?-1:1));
+    }
+
+    // relax squash/stretch to normal
+    squash += (1 - squash)*0.2;
+    stretch+= (1 - stretch)*0.2;
+    if(landCooldown>0) landCooldown--;
+
+    // run legs when on ground
+    if(on) runPhase += 0.25 + baseSpeed*0.02;
+    else   runPhase += 0.15;
 
     // spawn logic
     spawnTimer--;
@@ -126,17 +183,24 @@
       spawnTimer = spawnCD + irand(-8, 12); // a little randomness
     }
 
-    // move obstacles & score on pass
+    // move obstacles & increment score on clear
+    let nearMiss=false;
     for(const o of obs){
       o.x -= baseSpeed;
-      if(o.x + o.w === Math.floor(px)) { /* optional exact pass tick */ }
-    }
+      if(o.bob){ o.bobT += o.bobS; o.y = (GY - o.h) + Math.sin(o.bobT)*o.bobA; }
 
-    // remove off-screen & increment score when pipes leave fully
+      // near-miss check (within 12px horizontally and overlapping vertically)
+      if(Math.abs((px+pw/2) - (o.x+o.w/2)) < 12){
+        if(py+ph > o.y - 8) nearMiss = true;
+      }
+    }
+    if(nearMiss) shake = Math.min(4, shake+0.6); else shake *= 0.9;
+
+    // scoring & cleanup
     for(let i=obs.length-1;i>=0;i--){
       if(obs[i].x + obs[i].w < 0){
         obs.splice(i,1);
-        score++; scoreEl.textContent = score; // reward survival per obstacle cleared
+        score++; scoreEl.textContent = score; // +1 per obstacle cleared
       }
     }
 
@@ -148,15 +212,37 @@
       }
     }
 
+    // particles update
+    for(let i=particles.length-1;i>=0;i--){
+      const p=particles[i];
+      p.x+=p.vx; p.y+=p.vy; p.vy+=0.12; p.a-=0.03;
+      if(p.a<=0) particles.splice(i,1);
+    }
+
     draw(false);
     requestAnimationFrame(step);
   }
 
   function draw(over){
+    // screen shake
+    const sx = (Math.random()*2-1) * shake;
+    const sy = (Math.random()*2-1) * shake;
+    x.setTransform(1,0,0,1,sx,sy);
+
     // sky
     x.fillStyle='#87ceeb'; x.fillRect(0,0,W,H);
-    // ground
+
+    // clouds
+    x.fillStyle='rgba(255,255,255,.92)';
+    for(const c of clouds){
+      bubble(c.x,c.y,26*c.s); bubble(c.x+20*c.s,c.y+6*c.s,18*c.s); bubble(c.x-18*c.s,c.y+8*c.s,16*c.s);
+    }
+
+    // ground (scrolling tiles)
     x.fillStyle='#5daa2a'; x.fillRect(0,GY,W,H-GY);
+    const stripeOffset = (frames*baseSpeed*0.6)%32;
+    x.fillStyle='#3a7d24';
+    for(let xg=-stripeOffset;xg<W;xg+=32){ x.fillRect(xg,GY+22,22,6); }
 
     // obstacles (green pipes)
     for(const o of obs){
@@ -165,16 +251,35 @@
       x.strokeStyle='rgba(0,0,0,.15)'; x.strokeRect(o.x,o.y,o.w,o.h);
     }
 
-    // player — little cartoon character
-    // body (blue overalls)
+    // particles
+    for(const p of particles){
+      x.globalAlpha = Math.max(0,p.a);
+      x.fillStyle='#ffffff';
+      x.fillRect(p.x, p.y, 2, 2);
+      x.globalAlpha = 1;
+    }
+
+    // player — cartoon hero with squash & stretch + leg swing
     const bx = px, by = py, bw = pw, bh = ph;
+    const cx = bx + bw/2, cy = by + bh/2;
+    x.save();
+    x.translate(cx, cy);
+    x.scale(stretch, squash);  // stretch X, squash Y
+    x.translate(-cx, -cy);
+
     // shadow
-    x.fillStyle='rgba(0,0,0,.15)'; x.beginPath(); x.ellipse(bx+bw/2, by+bh+6, 14, 5, 0, 0, Math.PI*2); x.fill();
-    // legs
-    x.fillStyle='#2e86de'; x.fillRect(bx+3, by+bh-8, 6, 8);
-    x.fillRect(bx+bw-9, by+bh-8, 6, 8);
+    x.fillStyle='rgba(0,0,0,.15)'; 
+    x.beginPath(); x.ellipse(bx+bw/2, by+bh+6, 14, 5, 0, 0, Math.PI*2); x.fill();
+
+    // legs (swing)
+    const k = Math.sin(runPhase)*3;
+    x.fillStyle='#2e86de';
+    x.fillRect(bx+3+k, by+bh-8, 6, 8);
+    x.fillRect(bx+bw-9-k, by+bh-8, 6, 8);
+
     // torso
     x.fillStyle='#54a0ff'; x.fillRect(bx+3, by+10, bw-6, bh-14);
+
     // head
     x.fillStyle='#ffcc99'; x.beginPath(); x.arc(bx+bw/2, by+8, 8, 0, Math.PI*2); x.fill();
     // eyes
@@ -186,19 +291,22 @@
     x.fillStyle='#e74c3c'; x.fillRect(bx-2, by-4, bw+4, 6);
     x.fillStyle='#c0392b'; x.fillRect(bx+8, by-1, 10, 3); // brim
 
+    x.restore();
+
     if(over){
       x.fillStyle='rgba(0,0,0,.55)';
       x.fillRect(W/2-140, H/2-50, 280, 100);
       x.strokeStyle='#fff3'; x.strokeRect(W/2-140, H/2-50, 280, 100);
       x.fillStyle='#fff'; x.textAlign='center'; x.textBaseline='middle';
       x.font='bold 26px system-ui,sans-serif'; x.fillText('GAME OVER', W/2, H/2-8);
-      x.font='14px system-ui,sans-serif'; x.fillText('Tap or press Space to try again (reload page)', W/2, H/2+20);
+      x.font='14px system-ui,sans-serif'; x.fillText('Reload to try again • Keep jumping!', W/2, H/2+20);
     }
   }
 
-  // Prime a spawn so the first pipe appears shortly
-  spawnTimer = 30;
+  function bubble(x0,y0,r){ x.beginPath(); x.arc(x0,y0,r,0,Math.PI*2); x.fill(); }
+
   // Start immediately
+  spawnTimer = 30; // first pipe soon
   requestAnimationFrame(step);
 })();
 </script>
