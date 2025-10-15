@@ -3,13 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Shahroz’s Tiny Runner+++</title>
+<title>Shahroz’s Trolly Runner</title>
 <style>
   body{margin:0;background:#111;color:#eee;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
   .wrap{max-width:640px;margin:0 auto;padding:8px}
-  .bar{display:flex;justify-content:space-between;margin:8px 0;gap:8px;flex-wrap:wrap}
+  .bar{display:flex;justify-content:space-between;margin:8px 0;gap:8px;flex-wrap:wrap;align-items:center}
   #game{display:block;width:100%;height:auto;border:1px solid #333;background:#87ceeb;border-radius:8px}
   .note{opacity:.85;text-align:center;font-size:12px;margin-top:6px}
+  .troll{min-height:18px;opacity:.95}
+  .btn{appearance:none;border:none;background:#2ecc71;color:#111;padding:6px 10px;border-radius:8px;font-weight:800;cursor:pointer}
 </style>
 </head>
 <body>
@@ -17,10 +19,12 @@
   <div class="bar">
     <div>Score: <span id="s">0</span></div>
     <div>Level: <span id="lvl">1</span></div>
+    <div class="troll" id="troll"></div>
+    <button class="btn" id="pauseBtn" title="P to pause/resume">Pause</button>
     <div>Created by <b>Shahroz Khan</b></div>
   </div>
   <canvas id="game" width="640" height="360"></canvas>
-  <div class="note">Jump: Space / ↑ / Tap • Avoid pipes/guys • Birds fly • Difficulty ramps • Snake mocks on fail 😈</div>
+  <div class="note">Jump: Space / ↑ / Tap • Pause: P • Avoid pipes/guys • Grab ⭐ (watch out, some troll you!)</div>
 </div>
 
 <script>
@@ -35,53 +39,53 @@
 
   // --- player (cartoon) & animation state ---
   let px=120, py=GY-28, pw=24, ph=28, pvy=0, on=true, hold=false, buf=0, coyote=0;
-  let runPhase=0;               // leg swing
-  let squash=1, stretch=1;      // squash & stretch
-  let landCooldown=0;           // for extra squash on land
+  let runPhase=0, squash=1, stretch=1, landCooldown=0;
 
   // --- background: clouds & birds ---
   const clouds=[];              // {x,y,s}
   const birds=[];               // {x,y,v,flap,dir}
   function spawnBird(){
-    birds.push({
-      x: W + Math.random()*120,
-      y: 40 + Math.random()*120,
-      v: 1.2 + Math.random()*0.8,
-      flap: Math.random()*Math.PI*2,
-      dir: Math.random()<.5 ? 1 : -1 // sometimes fly right-to-left or left-to-right
-    });
+    birds.push({ x: W + Math.random()*120, y: 40 + Math.random()*120, v: 1.2 + Math.random()*0.8, flap: Math.random()*Math.PI*2, dir: Math.random()<.5 ? 1 : -1 });
   }
 
   // --- particles ---
   const particles=[];           // {x,y,vx,vy,a}
 
-  // --- obstacles (multiple) ---
+  // --- obstacles ---
   // pipe: {type:'pipe', x,y,w,h, bob?, bobA, bobS, bobT}
   // guy : {type:'guy', x,y,w,h, walk, color}
+  // coin: {type:'coin', x,y,w,h, shy?, jig, sparkle}
   const obs=[];
-  let baseSpeed=4;           // ramps with level
-  let spawnCD=64;            // frames until next spawn (ramps down)
-  let spawnTimer=0;
+  let baseSpeed=4, spawnCD=62, spawnTimer=0;
 
-  // --- score / level ---
+  // --- score / level / flow ---
   let score=0; const scoreEl=document.getElementById('s');
   let level=1; const lvlEl=document.getElementById('lvl');
-  let frames=0;
-  let levelAnim=0; // frames of level-up animation
+  let frames=0, levelAnim=0, paused=false, countdown=0;
 
-  // --- running flag ---
-  let running=true;
+  // --- running flag & juice ---
+  let running=true, shake=0, snake=null;
+  const pauseBtn = document.getElementById('pauseBtn');
 
-  // --- near-miss shake ---
-  let shake=0;
+  // --- trolls ---
+  const trollEl = document.getElementById('troll');
+  let trollTimer = 0;
+  const TAUNTS = [
+    "nice jump… almost 😏",
+    "that coin ran from you 😂",
+    "pipes say hi 👋",
+    "speeding up… try to keep up",
+    "free cardio!",
+    "who needs coins anyway?",
+    "close call! 🎯",
+    "bro blinked and missed it",
+    "legend in progress… maybe",
+  ];
 
-  // --- snake-on-death ---
-  let snake=null; // {x, baseY, rise, mouth}
-
-  // --- input: one button jump + restart ---
+  // --- input: one button jump + restart + pause ---
   let want=false;
   function press(){
-    if(!running){ restart(); return; } // tap to try again
+    if(!running && countdown===0){ restart(); return; } // tap to try again
     want=true; hold=true;
   }
   function release(){ hold=false; }
@@ -89,103 +93,101 @@
   addEventListener('pointerup', release, {passive:true});
   addEventListener('keydown', e=>{
     if(e.repeat) return;
-    if(e.code==='Space'||e.code==='ArrowUp') {
-      if(!running){ restart(); return; }
-      press();
-    }
-    if((e.code==='Enter'||e.code==='NumpadEnter') && !running) restart();
+    if(e.code==='Space'||e.code==='ArrowUp') { if(!running && countdown===0){ restart(); return; } press(); }
+    if(e.code==='KeyP'){ togglePause(); }
+    if((e.code==='Enter'||e.code==='NumpadEnter') && !running && countdown===0) restart();
   });
   addEventListener('keyup', e=>{
     if(e.code==='Space'||e.code==='ArrowUp') release();
   });
+  pauseBtn.onclick = togglePause;
+  function togglePause(){
+    if(!running) return; // freeze only during play
+    paused = !paused;
+    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+  }
 
   // --- helpers ---
-  function hit(ax,ay,aw,ah,bx,by,bw,bh){
-    return ax<bx+bw && ax+aw>bx && ay<by+bh && ay+ah>by;
-  }
-  function rand(a,b){ return Math.random()*(b-a)+a; }
-  function irand(a,b){ return Math.floor(rand(a,b)); }
-  function emitDust(x0,y0,dir=1){
-    for(let i=0;i<6;i++){
-      particles.push({ x:x0, y:y0, vx:(Math.random()*1.5+0.5)*dir, vy:-Math.random()*1.5-0.2, a:1 });
-    }
-  }
+  const rand=(a,b)=>Math.random()*(b-a)+a, irand=(a,b)=>Math.floor(rand(a,b));
+  const hit=(ax,ay,aw,ah,bx,by,bw,bh)=> ax<bx+bw && ax+aw>bx && ay<by+bh && ay+ah>by;
+  function emitDust(x0,y0,dir=1){ for(let i=0;i<6;i++) particles.push({ x:x0, y:y0, vx:(Math.random()*1.5+0.5)*dir, vy:-Math.random()*1.5-0.2, a:1 });}
+  function taunt(force=false){ if(force || trollTimer<=0){ trollEl.textContent = TAUNTS[irand(0,TAUNTS.length)]; trollTimer = 180; } }
 
-  // init clouds & some birds
-  for(let i=0;i<6;i++){ clouds.push({x:irand(0,W), y:irand(20,120), s:rand(0.4,1.2)}); }
+  // init clouds/birds
+  for(let i=0;i<6;i++) clouds.push({x:irand(0,W), y:irand(20,120), s:rand(0.4,1.2)});
   for(let i=0;i<2;i++) spawnBird();
 
-  // spawn one or two pipes/guys with varied size & sometimes bobbing
-  function spawnObstacle(){
-    const chooseGuy = Math.random() < Math.min(0.15 + level*0.03, 0.45); // higher level => more guys
-    if(chooseGuy){
-      // A "guy" walking on ground
-      const w = irand(18, 22);
-      const h = irand(26, 32);
-      const color = Math.random()<.5 ? '#ff9f43' : '#54a0ff';
-      obs.push({type:'guy', x:W+10, y:GY-h, w, h, walk:0, color});
-      // sometimes a friend right behind
-      if(Math.random()<.35){
-        const d = irand(40, 80);
-        obs.push({type:'guy', x:W+10+d, y:GY-h, w:irand(18,22), h:irand(26,32), walk:0, color: (Math.random()<.5 ? '#10ac84' : '#ee5253')});
-      }
-    }else{
-      // pipe
-      const w = irand(24, 36 + Math.min(10, level));
-      const h = irand(18 + Math.min(22, level*2), 40 + Math.min(32, level*2));
-      let y  = GY - h;
-      const o = {type:'pipe', x: W + 10, y, w, h, bob:false, bobA:0, bobS:0, bobT:0};
-      if(Math.random() < Math.min(0.08 + level*0.02, 0.28)){
-        o.bob = true; o.bobA = rand(2,6); o.bobS = rand(0.02,0.05); o.bobT = Math.random()*Math.PI*2;
-      }
-      obs.push(o);
+  // spawners
+  function spawnPipePair(xBase){
+    const w = irand(24, 36 + Math.min(10, level));
+    const h = irand(18 + Math.min(22, level*2), 40 + Math.min(32, level*2));
+    const o = {type:'pipe', x:xBase, y: GY - h, w, h, bob:false, bobA:0, bobS:0, bobT:0};
+    if(Math.random() < Math.min(0.08 + level*0.02, 0.28)){ o.bob = true; o.bobA = rand(2,6); o.bobS = rand(0.02,0.05); o.bobT = Math.random()*Math.PI*2; }
+    obs.push(o);
+    if(Math.random() < Math.min(0.1 + level*0.02, 0.35)){
+      const gap = irand(64 - Math.min(28, level*2), 110);
+      const h2 = irand(18, 40 + Math.min(30, level*2));
+      const o2 = {type:'pipe', x:xBase + gap, y: GY - h2, w: irand(24,36), h: h2, bob:false, bobA:0, bobS:0, bobT:0};
+      if(Math.random() < Math.min(0.06 + level*0.02, 0.22)){ o2.bob = true; o2.bobA = rand(2,5); o2.bobS = rand(0.02,0.05); o2.bobT = Math.random()*Math.PI*2; }
+      obs.push(o2);
+    }
+  }
+  function spawnGuyCluster(xBase){
+    const w = irand(18, 22), h = irand(26, 32);
+    const color = Math.random()<.5 ? '#ff9f43' : '#54a0ff';
+    obs.push({type:'guy', x:xBase, y:GY-h, w, h, walk:0, color});
+    if(Math.random()<.4){ const d=irand(40, 80); obs.push({type:'guy', x:xBase+d, y:GY-h, w:irand(18,22), h:irand(26,32), walk:0, color:(Math.random()<.5?'#10ac84':'#ee5253')}); }
+  }
+  function spawnCoin(x,y,shy=false){
+    obs.push({type:'coin', x, y, w:14, h:14, shy, jig:Math.random()*Math.PI*2, sparkle:0});
+  }
 
-      // rare second pipe close behind
-      if(Math.random() < Math.min(0.08 + level*0.02, 0.33)){
-        const gap = irand(64 - Math.min(28, level*2), 110);
-        const h2 = irand(18, 40 + Math.min(30, level*2));
-        const o2 = {type:'pipe', x: W + 10 + gap, y: GY - h2, w: irand(24, 36), h: h2, bob:false, bobA:0, bobS:0, bobT:0};
-        if(Math.random() < Math.min(0.06 + level*0.02, 0.22)){
-          o2.bob = true; o2.bobA = rand(2,5); o2.bobS = rand(0.02,0.05); o2.bobT = Math.random()*Math.PI*2;
-        }
-        obs.push(o2);
-      }
+  function spawnChunk(xStart){
+    // chance to switch pipes with guys
+    if(Math.random() < Math.min(0.15 + level*0.03, 0.5)) {
+      spawnGuyCluster(xStart);
+      if(Math.random()<0.6) spawnCoin(xStart+irand(12,28), GY - irand(60,100), true); // shy coin near guys (troll)
+    } else {
+      spawnPipePair(xStart);
+      // coin bait above dangerous spot
+      if(Math.random()<0.75) spawnCoin(xStart+10, GY - irand(90,130), Math.random()<0.5);
     }
   }
 
   function restart(){
-    // reset everything cleanly
     px=120; py=GY-28; pw=24; ph=28; pvy=0; on=true; hold=false; buf=0; coyote=0;
     runPhase=0; squash=1; stretch=1; landCooldown=0;
     obs.length=0; particles.length=0;
-    baseSpeed=4; spawnCD=64; spawnTimer=30; // first obstacle soon
+    baseSpeed=4; spawnCD=62; spawnTimer=30;
     score=0; scoreEl.textContent = score;
-    level=1; lvlEl.textContent = level; frames=0; levelAnim=30; // show "LEVEL 1"
-    snake=null;
-    running=true;
+    level=1; lvlEl.textContent = level; frames=0; levelAnim=30;
+    snake=null; shake=0; paused=false; pauseBtn.textContent='Pause';
+    trollEl.textContent=""; trollTimer=0;
+    running=true; countdown=90; // 3..2..1
   }
 
-  // --- loop ---
+  // loop
   function step(){
+    if(countdown>0){ draw(true); countdown--; requestAnimationFrame(step); return; }
     if(!running){ draw(true); requestAnimationFrame(step); return; }
+    if(paused){ draw(false); requestAnimationFrame(step); return; }
 
     frames++;
+    if(trollTimer>0) trollTimer--;
 
-    // difficulty ramp (every ~8s)
+    // difficulty ramp
     if(frames % 480 === 0){
-      level++;
-      lvlEl.textContent = level;
-      levelAnim = 32; // pop the banner
-      baseSpeed = Math.min(9.2, baseSpeed + 0.45);
-      spawnCD   = Math.max(30,  spawnCD - 5);   // more frequent spawns
-      // occasionally add a new bird
-      if(birds.length<5 && Math.random()<.6) spawnBird();
+      level++; lvlEl.textContent = level; levelAnim = 32;
+      baseSpeed = Math.min(9.4, baseSpeed + 0.45);
+      spawnCD   = Math.max(28,  spawnCD - 5);
+      if(birds.length<6 && Math.random()<.65) spawnBird();
+      taunt(); // playful message
     }
 
     // clouds
-    for(const c of clouds){
-      c.x -= baseSpeed * 0.25 * c.s;
-      if(c.x < -60){ c.x = W + 40; c.y = irand(20,120); c.s = rand(0.4,1.2); }
+    for(const c0 of clouds){
+      c0.x -= baseSpeed * 0.25 * c0.s;
+      if(c0.x < -60){ c0.x = W + 40; c0.y = irand(20,120); c0.s = rand(0.4,1.2); }
     }
 
     // birds
@@ -196,88 +198,90 @@
       if(b.dir<0 && b.x<-40){ b.x = W+40; b.y = 40 + Math.random()*120; }
     }
 
-    // jump buffer + coyote
+    // input buffering
     if(want){ buf=7; want=false; }
     if(on) coyote=5; else if(coyote>0) coyote--;
 
     if(buf>0){
       if(on||coyote>0){
         pvy=JUMP; on=false; buf=0;
-        squash=0.85; stretch=1.15;     // squash on takeoff
+        squash=0.85; stretch=1.15;
         emitDust(px+pw/2, GY, (Math.random()<0.5?-1:1));
       } else { buf--; }
     }
 
     // physics
-    if(hold && pvy<0) pvy+=-0.25;      // variable jump height
+    if(hold && pvy<0) pvy+=-0.25;
     pvy+=GRAV; if(pvy>FALLMAX) pvy=FALLMAX;
-    const wasOn = on;
+    const wasOn=on;
     py+=pvy;
     if(py+ph>=GY){ py=GY-ph; pvy=0; on=true; } else on=false;
 
-    // land effect
-    if(!wasOn && on){
-      landCooldown=6;
-      squash=1.2; stretch=0.85;        // squash on landing
-      emitDust(px+pw/2, GY, (Math.random()<0.5?-1:1));
-    }
-
-    // relax squash/stretch to normal
-    squash += (1 - squash)*0.2;
-    stretch+= (1 - stretch)*0.2;
-    if(landCooldown>0) landCooldown--;
-
-    // run legs when on ground
-    if(on) runPhase += 0.25 + baseSpeed*0.02;
-    else   runPhase += 0.15;
+    if(!wasOn && on){ landCooldown=6; squash=1.2; stretch=0.85; emitDust(px+pw/2, GY, (Math.random()<0.5?-1:1)); }
+    squash += (1 - squash)*0.2; stretch+= (1 - stretch)*0.2; if(landCooldown>0) landCooldown--;
+    runPhase += on ? (0.25 + baseSpeed*0.02) : 0.15;
 
     // spawn logic
-    spawnTimer--;
-    if(spawnTimer<=0){
-      spawnObstacle();
-      spawnTimer = spawnCD + irand(-8, 12); // a little randomness
-    }
+    if(--spawnTimer<=0){ spawnChunk(W+10); spawnTimer = spawnCD + irand(-10, 14); }
 
-    // move obstacles & increment score on clear
+    // update obstacles & near-miss
     let nearMiss=false;
     for(const o of obs){
       if(o.type==='pipe'){
         o.x -= baseSpeed;
-        if(o.bob){ o.bobT += (o.bobS); o.y = (GY - o.h) + Math.sin(o.bobT)*o.bobA; }
-      }else{ // guy walks slightly
-        o.x -= baseSpeed*0.95;
-        o.walk += 0.25 + baseSpeed*0.02;
+        if(o.bob){ o.bobT += o.bobS; o.y = (GY - o.h) + Math.sin(o.bobT)*o.bobA; }
+      }else if(o.type==='guy'){
+        o.x -= baseSpeed*0.95; o.walk += 0.25 + baseSpeed*0.02;
+      }else{ // coin
+        o.x -= baseSpeed*0.92;
+        o.jig += 0.2;
+        o.y += Math.sin(o.jig)*0.6;
+        // shy coins bend away if player is close (troll)
+        if(o.shy){
+          const dx = (px+pw/2) - (o.x+o.w/2);
+          if(Math.abs(dx) < 60) o.x -= Math.sign(dx)*1.8; // swerve away
+        }
+        if(o.sparkle<1) o.sparkle += 0.03;
       }
 
-      // near-miss check
-      if(Math.abs((px+pw/2) - (o.x+o.w/2)) < 12){
+      // near-miss
+      if(o.type!=='coin' && Math.abs((px+pw/2)-(o.x+o.w/2)) < 12){
         if(py+ph > o.y - 8) nearMiss = true;
       }
     }
-    if(nearMiss) shake = Math.min(4, shake+0.6); else shake *= 0.9;
+    if(nearMiss){ shake = Math.min(4, shake+0.6); taunt(); } else shake *= 0.9;
 
-    // scoring & cleanup
+    // cleanup & scoring
     for(let i=obs.length-1;i>=0;i--){
       if(obs[i].x + obs[i].w < 0){
-        obs.splice(i,1);
-        score++; scoreEl.textContent = score; // +1 per obstacle cleared
+        const gone = obs.splice(i,1)[0];
+        if(gone.type!=='coin'){ score++; scoreEl.textContent = score; }
       }
     }
 
     // collisions
-    for(const o of obs){
+    for(let i=obs.length-1;i>=0;i--){
+      const o = obs[i];
+      if(o.type==='coin'){
+        if(hit(px,py,pw,ph, o.x,o.y,o.w,o.h)){
+          // got coin — tiny reward & sparkle
+          score+=2; scoreEl.textContent=score;
+          taunt(true);
+          obs.splice(i,1);
+        }
+        continue;
+      }
       if(hit(px,py,pw,ph, o.x,o.y,o.w,o.h)){
-        // set snake to emerge from nearest pipe (or center if none)
+        // spawn snake from nearest pipe or fake one under player
         const pipe = [...obs].filter(z=>z.type==='pipe' && z.x+z.w>0 && z.x<W).sort((a,b)=>Math.abs((a.x+a.w/2)-px)-Math.abs((b.x+b.w/2)-px))[0];
-        let sx = pipe ? (pipe.x + pipe.w/2) : W/2;
+        let sx = pipe ? (pipe.x + pipe.w/2) : px+pw/2;
         let sy = pipe ? pipe.y : (GY-28);
         snake = { x:sx, baseY:sy, rise:0, mouth:0 };
-        running=false;
-        break;
+        running=false; break;
       }
     }
 
-    // particles update
+    // particles
     for(let i=particles.length-1;i>=0;i--){
       const p=particles[i];
       p.x+=p.vx; p.y+=p.vy; p.vy+=0.12; p.a-=0.03;
@@ -304,70 +308,37 @@
     }
 
     // birds
-    for(const b of birds){
-      drawBird(b);
-    }
+    for(const b of birds) drawBird(b);
 
     // ground (scrolling tiles)
     x.fillStyle='#5daa2a'; x.fillRect(0,GY,W,H-GY);
     const stripeOffset = (frames*baseSpeed*0.6)%32;
-    x.fillStyle='#3a7d24';
-    for(let xg=-stripeOffset;xg<W;xg+=32){ x.fillRect(xg,GY+22,22,6); }
+    x.fillStyle='#3a7d24'; for(let xg=-stripeOffset;xg<W;xg+=32) x.fillRect(xg,GY+22,22,6);
 
     // obstacles
     for(const o of obs){
-      if(o.type==='pipe'){
-        x.fillStyle='#2ecc71'; x.fillRect(o.x,o.y,o.w,o.h);
-        x.fillStyle='#27ae60'; x.fillRect(o.x-4,o.y-6,o.w+8,6);
-        x.strokeStyle='rgba(0,0,0,.15)'; x.strokeRect(o.x,o.y,o.w,o.h);
-      }else{ // guy
-        drawGuy(o);
-      }
+      if(o.type==='pipe'){ x.fillStyle='#2ecc71'; x.fillRect(o.x,o.y,o.w,o.h); x.fillStyle='#27ae60'; x.fillRect(o.x-4,o.y-6,o.w+8,6); x.strokeStyle='rgba(0,0,0,.15)'; x.strokeRect(o.x,o.y,o.w,o.h); }
+      else if(o.type==='guy') drawGuy(o);
+      else drawCoin(o);
     }
 
     // particles
-    for(const p of particles){
-      x.globalAlpha = Math.max(0,p.a);
-      x.fillStyle='#ffffff';
-      x.fillRect(p.x, p.y, 2, 2);
-      x.globalAlpha = 1;
-    }
+    for(const p of particles){ x.globalAlpha=Math.max(0,p.a); x.fillStyle='#ffffff'; x.fillRect(p.x,p.y,2,2); x.globalAlpha=1; }
 
-    // player — cartoon hero with squash & stretch + leg swing
-    const bx = px, by = py, bw = pw, bh = ph;
-    const cx = bx + bw/2, cy = by + bh/2;
-    x.save();
-    x.translate(cx, cy);
-    x.scale(stretch, squash);
-    x.translate(-cx, -cy);
-
-    // shadow
-    x.fillStyle='rgba(0,0,0,.15)'; 
-    x.beginPath(); x.ellipse(bx+bw/2, by+bh+6, 14, 5, 0, 0, Math.PI*2); x.fill();
-
-    // legs (swing)
-    const k = Math.sin(runPhase)*3;
-    x.fillStyle='#2e86de';
-    x.fillRect(bx+3+k, by+bh-8, 6, 8);
-    x.fillRect(bx+bw-9-k, by+bh-8, 6, 8);
-
-    // torso
+    // player with squash/stretch + legs
+    const bx=px, by=py, bw=pw, bh=ph, cx=bx+bw/2, cy=by+bh/2;
+    x.save(); x.translate(cx,cy); x.scale(stretch,squash); x.translate(-cx,-cy);
+    x.fillStyle='rgba(0,0,0,.15)'; x.beginPath(); x.ellipse(bx+bw/2, by+bh+6, 14, 5, 0, 0, Math.PI*2); x.fill();
+    const k = Math.sin(runPhase)*3; x.fillStyle='#2e86de';
+    x.fillRect(bx+3+k, by+bh-8, 6, 8); x.fillRect(bx+bw-9-k, by+bh-8, 6, 8);
     x.fillStyle='#54a0ff'; x.fillRect(bx+3, by+10, bw-6, bh-14);
-
-    // head
     x.fillStyle='#ffcc99'; x.beginPath(); x.arc(bx+bw/2, by+8, 8, 0, Math.PI*2); x.fill();
-    // eyes
-    x.fillStyle='#000'; x.fillRect(bx+bw/2-5, by+6, 2, 3);
-    x.fillRect(bx+bw/2+3, by+6, 2, 3);
-    // smile
+    x.fillStyle='#000'; x.fillRect(bx+bw/2-5, by+6, 2, 3); x.fillRect(bx+bw/2+3, by+6, 2, 3);
     x.strokeStyle='#b3542e'; x.lineWidth=1.5; x.beginPath(); x.arc(bx+bw/2, by+10, 4, 0.1*Math.PI, 0.9*Math.PI); x.stroke();
-    // cap
-    x.fillStyle='#e74c3c'; x.fillRect(bx-2, by-4, bw+4, 6);
-    x.fillStyle='#c0392b'; x.fillRect(bx+8, by-1, 10, 3); // brim
-
+    x.fillStyle='#e74c3c'; x.fillRect(bx-2, by-4, bw+4, 6); x.fillStyle='#c0392b'; x.fillRect(bx+8, by-1, 10, 3);
     x.restore();
 
-    // LEVEL UP banner
+    // LEVEL UP banner (pulse)
     if(levelAnim>0){
       levelAnim--;
       const t = levelAnim/32;
@@ -375,27 +346,26 @@
       const scale = 1 + 0.2*Math.sin((1-t)*Math.PI);
       x.save();
       x.globalAlpha = alpha;
-      x.translate(W/2, 80);
-      x.scale(scale, scale);
+      x.translate(W/2, 80); x.scale(scale, scale);
       x.fillStyle='#000a'; x.fillRect(-120,-24,240,48);
       x.strokeStyle='#fff3'; x.strokeRect(-120,-24,240,48);
       x.fillStyle='#fff'; x.textAlign='center'; x.textBaseline='middle';
-      x.font='bold 20px system-ui,sans-serif';
-      x.fillText('LEVEL UP!  →  ' + level, 0, 0);
+      x.font='bold 20px system-ui,sans-serif'; x.fillText('LEVEL UP!  →  ' + level, 0, 0);
       x.restore();
     }
 
-    if(over){
-      // animate snake
-      if(snake){
-        snake.rise = Math.min(38, snake.rise + 1.4);
-        snake.mouth += 0.2;
-        drawSnake(snake);
-      }
+    // countdown overlay
+    if(countdown>0){
+      x.fillStyle='rgba(0,0,0,.35)'; x.fillRect(0,0,W,H);
+      x.fillStyle='#fff'; x.textAlign='center'; x.textBaseline='middle';
+      x.font='bold 64px system-ui,sans-serif';
+      const n = Math.ceil(countdown/30);
+      x.fillText(n, W/2, H/2);
+    }
 
-      // overlay
-      x.fillStyle='rgba(0,0,0,.55)';
-      x.fillRect(W/2-160, H/2-60, 320, 120);
+    if(over){
+      if(snake){ snake.rise = Math.min(38, snake.rise + 1.4); snake.mouth += 0.2; drawSnake(snake); }
+      x.fillStyle='rgba(0,0,0,.55)'; x.fillRect(W/2-160, H/2-60, 320, 120);
       x.strokeStyle='#fff3'; x.strokeRect(W/2-160, H/2-60, 320, 120);
       x.fillStyle='#fff'; x.textAlign='center'; x.textBaseline='middle';
       x.font='bold 26px system-ui,sans-serif'; x.fillText('GAME OVER', W/2, H/2-12);
@@ -403,70 +373,50 @@
     }
   }
 
+  // draw helpers
   function drawBird(b){
-    // body
-    x.save();
-    x.translate(b.x, b.y);
+    x.save(); x.translate(b.x,b.y);
     const wing = Math.sin(b.flap)*6;
-    x.fillStyle = '#f5f6fa';
-    x.beginPath(); x.ellipse(0,0,10,6,0,0,Math.PI*2); x.fill();
-    // wings
-    x.fillStyle = '#dcdde1';
-    x.beginPath(); x.ellipse(-6, -2, 6, 3+wing*0.1, -0.2, 0, Math.PI*2); x.fill();
+    x.fillStyle = '#f5f6fa'; x.beginPath(); x.ellipse(0,0,10,6,0,0,Math.PI*2); x.fill();
+    x.fillStyle = '#dcdde1'; x.beginPath(); x.ellipse(-6, -2, 6, 3+wing*0.1, -0.2, 0, Math.PI*2); x.fill();
     x.beginPath(); x.ellipse(6, -2, 6, 3-wing*0.1, 0.2, 0, Math.PI*2); x.fill();
-    // beak
     x.fillStyle='#f9ca24'; x.fillRect(8,0,4,2);
-    // eye
     x.fillStyle='#000'; x.fillRect(3,-1,2,2);
     x.restore();
   }
-
   function drawGuy(o){
-    // little walking dude
-    // shadow
-    x.fillStyle='rgba(0,0,0,.15)';
-    x.beginPath(); x.ellipse(o.x+o.w/2, o.y+o.h+6, 12, 5, 0, 0, Math.PI*2); x.fill();
-    // legs
-    const k = Math.sin(o.walk)*3;
-    x.fillStyle=o.color;
-    x.fillRect(o.x+2+k, o.y+o.h-8, 5, 8);
-    x.fillRect(o.x+o.w-7-k, o.y+o.h-8, 5, 8);
-    // body
+    x.fillStyle='rgba(0,0,0,.15)'; x.beginPath(); x.ellipse(o.x+o.w/2, o.y+o.h+6, 12, 5, 0, 0, Math.PI*2); x.fill();
+    const k = Math.sin(o.walk)*3; x.fillStyle=o.color;
+    x.fillRect(o.x+2+k, o.y+o.h-8, 5, 8); x.fillRect(o.x+o.w-7-k, o.y+o.h-8, 5, 8);
     x.fillRect(o.x+2, o.y+8, o.w-4, o.h-12);
-    // head
     x.fillStyle='#ffd9b3'; x.beginPath(); x.arc(o.x+o.w/2, o.y+6, 6, 0, Math.PI*2); x.fill();
-    // eyes
-    x.fillStyle='#000'; x.fillRect(o.x+o.w/2-3, o.y+5, 2, 2);
-    x.fillRect(o.x+o.w/2+1, o.y+5, 2, 2);
+    x.fillStyle='#000'; x.fillRect(o.x+o.w/2-3, o.y+5, 2, 2); x.fillRect(o.x+o.w/2+1, o.y+5, 2, 2);
   }
-
+  function drawCoin(o){
+    // glow ring
+    x.globalAlpha = 0.25 + 0.25*Math.sin(o.sparkle*10);
+    x.fillStyle='#ffef9a'; x.beginPath(); x.arc(o.x+o.w/2, o.y+o.h/2, o.w*0.9, 0, Math.PI*2); x.fill();
+    x.globalAlpha = 1;
+    // coin
+    x.fillStyle='#ffd166'; x.beginPath(); x.arc(o.x+o.w/2, o.y+o.h/2, o.w/2, 0, Math.PI*2); x.fill();
+    x.strokeStyle='#ffef9a'; x.stroke();
+    // star glint
+    x.fillStyle='#fff'; const t=o.sparkle; const gx=o.x+o.w/2+Math.cos(t*8)*3, gy=o.y+o.h/2+Math.sin(t*8)*3;
+    x.fillRect(gx, gy, 2, 2);
+  }
   function drawSnake(s){
     const headX = s.x, pipeTop = s.baseY;
-    // pipe rim if not already there
-    x.fillStyle='#2ecc71'; x.fillRect(s.x-18, s.baseY, 36, 28); // pipe body stub
-    x.fillStyle='#27ae60'; x.fillRect(s.x-22, s.baseY-8, 44, 8); // rim
-
+    x.fillStyle='#2ecc71'; x.fillRect(s.x-18, s.baseY, 36, 28);
+    x.fillStyle='#27ae60'; x.fillRect(s.x-22, s.baseY-8, 44, 8);
     const neckH = s.rise;
-    // neck
-    x.fillStyle='#10ac84';
-    x.fillRect(headX-6, pipeTop - neckH, 12, neckH);
-    // head
-    x.fillStyle='#1dd1a1';
-    x.beginPath(); x.arc(headX, pipeTop - neckH - 10, 10, 0, Math.PI*2); x.fill();
-    // eyes
-    x.fillStyle='#000'; x.fillRect(headX-5, pipeTop - neckH - 13, 3, 3);
-    x.fillRect(headX+2, pipeTop - neckH - 13, 3, 3);
-    // mocking smile
-    x.strokeStyle='#000'; x.lineWidth=1.5;
-    x.beginPath();
-    const m = Math.sin(s.mouth)*0.6+0.4;
-    x.arc(headX, pipeTop - neckH - 8, 6, 0.1*Math.PI, (0.9+m)*Math.PI);
-    x.stroke();
+    x.fillStyle='#10ac84'; x.fillRect(headX-6, pipeTop - neckH, 12, neckH);
+    x.fillStyle='#1dd1a1'; x.beginPath(); x.arc(headX, pipeTop - neckH - 10, 10, 0, Math.PI*2); x.fill();
+    x.fillStyle='#000'; x.fillRect(headX-5, pipeTop - neckH - 13, 3, 3); x.fillRect(headX+2, pipeTop - neckH - 13, 3, 3);
+    x.strokeStyle='#000'; x.lineWidth=1.5; x.beginPath(); const m = Math.sin(s.mouth)*0.6+0.4; x.arc(headX, pipeTop - neckH - 8, 6, 0.1*Math.PI, (0.9+m)*Math.PI); x.stroke();
   }
-
   function bubble(x0,y0,r){ x.beginPath(); x.arc(x0,y0,r,0,Math.PI*2); x.fill(); }
 
-  // Start immediately
+  // start
   restart();
   requestAnimationFrame(step);
 })();
